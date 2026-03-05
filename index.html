@@ -113,6 +113,8 @@
   <h3>&#9881; Gameplay</h3>
   <div class="cr"><label>Grav</label><input type="range" id="gravSlider" min="10" max="200" value="67"><span class="cv" id="gravVal">67</span></div>
   <div class="cr"><label>Speed</label><input type="range" id="beltSlider" min="3" max="60" value="31"><span class="cv" id="beltVal">31</span></div>
+  <div class="cr"><label>Lip%</label><input type="range" id="lipSlider" min="0" max="80" value="28"><span class="cv" id="lipVal">28</span></div>
+  <div class="cr"><label>MrbGap</label><input type="range" id="mrbGapSlider" min="50" max="150" value="75"><span class="cv" id="mrbGapVal">75</span></div>
 </div>
 <div id="level-screen">
   <div class="ls-header">
@@ -227,6 +229,12 @@ var gravSlider=document.getElementById('gravSlider');
 var beltSlider=document.getElementById('beltSlider');
 gravSlider.addEventListener('input',function(){PHYS_GRAVITY=parseInt(gravSlider.value)/100;document.getElementById('gravVal').textContent=gravSlider.value;});
 beltSlider.addEventListener('input',function(){BELT_SPEED=parseInt(beltSlider.value)/10000;document.getElementById('beltVal').textContent=beltSlider.value;});
+var LIP_PCT=0.28;
+var lipSlider=document.getElementById('lipSlider');
+lipSlider.addEventListener('input',function(){LIP_PCT=parseInt(lipSlider.value)/100;document.getElementById('lipVal').textContent=lipSlider.value;});
+var MRB_GAP_FACTOR=0.75;
+var mrbGapSlider=document.getElementById('mrbGapSlider');
+mrbGapSlider.addEventListener('input',function(){MRB_GAP_FACTOR=parseInt(mrbGapSlider.value)/100;document.getElementById('mrbGapVal').textContent=mrbGapSlider.value;});
 
 // === CALIBRATION ===
 var cal={
@@ -656,10 +664,9 @@ function spawnPhysMarbles(box){
       var si=SNAKE_ORDER[MRB_PER_BOX-b.remaining]; // current snake position
       b.remaining--;b.spawnIdx=MRB_PER_BOX-b.remaining;
       var MR=getMR();
-      var mg=Math.min(14*S,L.bw/4.2);
-      // Spawn from the snake-ordered grid position
+      var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
       var mx=b.x+L.bw/2+(si.c-1)*mg;
-      var my=b.y+L.bh/2+(si.r-1)*mg-2*S;
+      var my=b.y+L.bh/2+(si.r-1)*mgY-2*S;
       var vx=(Math.random()-0.5)*2*S;
       var vy=-(2+Math.random()*2)*S; // pop upward
       physMarbles.push({x:mx,y:my,vx:vx,vy:vy,ci:b.ci,r:MR,spawnT:1.0});
@@ -1038,11 +1045,19 @@ function drawStock(){
         if(b.remaining>0&&t2>0.3){
           var mAlpha=Math.min(1,(t2-0.3)/0.4);
           ctx.globalAlpha=mAlpha;
-          var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);
+          var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
           for(var row=0;row<3;row++)for(var col2=0;col2<3;col2++){
-            drawMarble((col2-1)*mg,(row-1)*mg-2*S,mr,b.ci);
+            drawMarble((col2-1)*mg,(row-1)*mgY-2*S,mr,b.ci);
           }
+          // Redraw box front lip on top of marbles for depth
           ctx.globalAlpha=1;
+          ctx.save();
+          var lipH2=L.bh*LIP_PCT;
+          ctx.beginPath();
+          ctx.rect(-L.bw/2,L.bh/2-lipH2,L.bw,lipH2);
+          ctx.clip();
+          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
+          ctx.restore();
         }
         ctx.restore();
       }
@@ -1060,13 +1075,26 @@ function drawStock(){
         // Clear shadow before drawing marbles on top
         ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
         if(b.remaining>0){
-          var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);
-          // Draw remaining marbles in snake order (last ones remaining are drawn)
+          var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
+          // Collect remaining marbles and sort by row so bottom rows draw last (on top for perspective)
           var gone=MRB_PER_BOX-b.remaining;
+          var mrbsToDraw=[];
           for(var si2=gone;si2<MRB_PER_BOX;si2++){
-            var sp=SNAKE_ORDER[si2];
-            drawMarble((sp.c-1)*mg,(sp.r-1)*mg-2*S,mr,b.ci);
+            mrbsToDraw.push(SNAKE_ORDER[si2]);
           }
+          mrbsToDraw.sort(function(a,b2){return a.r-b2.r;});
+          for(var si2=0;si2<mrbsToDraw.length;si2++){
+            var sp=mrbsToDraw[si2];
+            drawMarble((sp.c-1)*mg,(sp.r-1)*mgY-2*S,mr,b.ci);
+          }
+          // Redraw box front lip on top of marbles for depth
+          ctx.save();
+          var lipH=L.bh*LIP_PCT;
+          ctx.beginPath();
+          ctx.rect(-L.bw/2,L.bh/2-lipH,L.bw,lipH);
+          ctx.clip();
+          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
+          ctx.restore();
         }
       }
     }

@@ -89,6 +89,24 @@
     border-radius:50%;background:#A08060;cursor:pointer;}
   #cal-panel .cr .cv{font-size:9px;color:#8B6914;width:28px;text-align:left;}
   #cal-panel .note{font-size:9px;color:rgba(90,74,56,0.5);margin-top:8px;text-align:center;}
+
+  /* === FRENZY MODE === */
+  #frenzy-banner{position:absolute;top:0;left:0;right:0;z-index:50;
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    pointer-events:none;padding-top:6px;}
+  #frenzy-banner.show{display:flex}
+  #frenzy-banner h2{
+    font-size:32px;font-weight:700;color:#FF4E00;
+    text-shadow:0 0 20px rgba(255,78,0,0.7),0 0 60px rgba(255,150,0,0.4),0 3px 0 #B83500;
+    letter-spacing:3px;animation:frenzyPulse 0.4s ease-in-out infinite alternate}
+  #frenzy-banner .frenzy-sub{font-size:13px;color:#FFB545;font-weight:600;
+    text-shadow:0 0 10px rgba(255,181,69,0.5);opacity:0.9}
+  @keyframes frenzyPulse{from{transform:scale(1);filter:brightness(1)}to{transform:scale(1.08);filter:brightness(1.3)}}
+  #frenzy-vignette{position:absolute;inset:0;z-index:40;pointer-events:none;display:none;
+    background:radial-gradient(ellipse at center,transparent 50%,rgba(255,80,0,0.12) 100%);
+    animation:vignetteBreath 0.6s ease-in-out infinite alternate}
+  #frenzy-vignette.show{display:block}
+  @keyframes vignetteBreath{from{opacity:0.6}to{opacity:1}}
 </style>
 </head>
 <body>
@@ -131,6 +149,8 @@
   <div class="cr"><label>Y</label><input type="range" id="cbk-dy" min="-200" max="200" value="85"><span class="cv" id="cbk-dy-v">85</span></div>
   <div class="cr"><label>Size</label><input type="range" id="cbk-s" min="20" max="200" value="100"><span class="cv" id="cbk-s-v">100</span></div>
 </div>
+<div id="frenzy-banner"><h2>⚡ FRENZY ⚡</h2><span class="frenzy-sub">SPEED BONUS ACTIVE</span></div>
+<div id="frenzy-vignette"></div>
 <div id="level-screen">
   <div class="ls-header">
     <div class="ls-title">Marble Sorter</div>
@@ -152,6 +172,17 @@ var stock=[],sortCols=[],particles=[],physMarbles=[],jumpers=[];
 var obstacles=[];
 var score=0,won=false,tick=0,hoverIdx=-1;
 var audioCtx=null;
+
+// === FRENZY MODE ===
+var frenzyMode=false;
+var frenzyT=0;           // 0→1 ramp-up progress
+var frenzyStartTick=0;
+var frenzySpeedMult=1;   // current belt speed multiplier
+var frenzyTargetMult=2.8;// max belt speed multiplier
+var frenzyShakeX=0,frenzyShakeY=0;
+var frenzySparkTimer=0;
+var frenzyBannerShown=false;
+var frenzyStreaks=[];     // speed-line particles
 
 // === LEVEL SYSTEM ===
 var currentLevel=0;
@@ -217,6 +248,9 @@ function showLevelSelect(){
   document.getElementById('level-screen').classList.remove('hidden');
   document.getElementById('cal-toggle').style.display='none';
   document.getElementById('music-toggle').style.display='none';
+  // Hide frenzy UI
+  document.getElementById('frenzy-banner').classList.remove('show');
+  document.getElementById('frenzy-vignette').classList.remove('show');
   buildLevelGrid();
 }
 
@@ -351,7 +385,43 @@ var sfx={
   drop:function(){tone(400,0.08,'sine',0.04,200);},
   sort:function(){tone(600,0.1,'triangle',0.1);setTimeout(function(){tone(900,0.1,'triangle',0.1);},80);},
   complete:function(){[523,659,784,1047].forEach(function(f,i){setTimeout(function(){tone(f,0.2,'sine',0.1);},i*90);});},
-  win:function(){[523,659,784,1047,1319,1568].forEach(function(f,i){setTimeout(function(){tone(f,0.25,'sine',0.12);},i*100);});}
+  win:function(){[523,659,784,1047,1319,1568].forEach(function(f,i){setTimeout(function(){tone(f,0.25,'sine',0.12);},i*100);});},
+  frenzyStart:function(){
+    // Rising power-up whoosh
+    ensureAudio();var t=audioCtx.currentTime;
+    // Sweeping rising tone
+    var o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    o.connect(g);g.connect(audioCtx.destination);
+    o.type='sawtooth';o.frequency.setValueAtTime(200,t);
+    o.frequency.exponentialRampToValueAtTime(1200,t+0.5);
+    g.gain.setValueAtTime(0.06,t);g.gain.linearRampToValueAtTime(0.12,t+0.3);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.6);
+    o.start(t);o.stop(t+0.7);
+    // Chord hit at peak
+    [523,659,784,1047].forEach(function(f,i){
+      setTimeout(function(){tone(f,0.35,'sine',0.08);},400+i*30);
+    });
+    // Sub bass thump
+    var o2=audioCtx.createOscillator(),g2=audioCtx.createGain();
+    o2.connect(g2);g2.connect(audioCtx.destination);
+    o2.type='sine';o2.frequency.setValueAtTime(80,t+0.4);
+    o2.frequency.exponentialRampToValueAtTime(40,t+0.8);
+    g2.gain.setValueAtTime(0.15,t+0.4);g2.gain.exponentialRampToValueAtTime(0.001,t+0.9);
+    o2.start(t+0.4);o2.stop(t+1.0);
+  },
+  frenzyTick:function(){
+    // Subtle rhythmic tick during frenzy
+    ensureAudio();var t=audioCtx.currentTime;
+    var o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    o.connect(g);g.connect(audioCtx.destination);
+    o.type='sine';
+    var f=600+Math.random()*400+frenzyT*600;
+    o.frequency.setValueAtTime(f,t);
+    o.frequency.exponentialRampToValueAtTime(f*0.5,t+0.08);
+    g.gain.setValueAtTime(0.03+frenzyT*0.02,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.08);
+    o.start(t);o.stop(t+0.1);
+  }
 };
 
 // === BACKGROUND MUSIC ===
@@ -384,7 +454,6 @@ function toggleMusic(){
 }
 musicBtn.addEventListener('click',function(e){e.stopPropagation();toggleMusic();});
 
-// Try auto-start music on first user interaction with the game
 function tryAutoStartMusic(){
   if(!musicStarted){
     bgMusic.play().then(function(){
@@ -400,86 +469,49 @@ var rollActive=false;
 function spawnMarbleClick(intensity,speedFactor){
   if(!audioCtx)return;
   var t=audioCtx.currentTime;
-
-  // --- Soft ceramic/glass tap — warm fundamental with gentle decay ---
   var o=audioCtx.createOscillator();
   var g=audioCtx.createGain();
-
-  // Lower, warmer pitch range — like real glass marbles
   var baseFreq=800+Math.random()*1200;
   o.type='sine';
   o.frequency.setValueAtTime(baseFreq,t);
-  // Gentle pitch slide down — satisfying "tock"
   o.frequency.exponentialRampToValueAtTime(baseFreq*0.6,t+0.12);
-
-  // Soft volume with longer, smoother decay — ASMR quality
   var vol=0.015+intensity*0.025*(0.4+Math.random()*0.6);
+  // Boost volume slightly during frenzy
+  if(frenzyMode) vol*=1+frenzyT*0.5;
   g.gain.setValueAtTime(0,t);
-  g.gain.linearRampToValueAtTime(vol,t+0.003); // tiny soft attack
+  g.gain.linearRampToValueAtTime(vol,t+0.003);
   g.gain.exponentialRampToValueAtTime(vol*0.3,t+0.06);
-  g.gain.exponentialRampToValueAtTime(0.0001,t+0.15+Math.random()*0.1); // long tail
-
-  o.connect(g);
-  g.connect(audioCtx.destination);
-  o.start(t);
-  o.stop(t+0.3);
-
-  // --- Crystalline harmonic overtone — bell-like shimmer ---
+  g.gain.exponentialRampToValueAtTime(0.0001,t+0.15+Math.random()*0.1);
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start(t);o.stop(t+0.3);
   if(Math.random()<0.5){
-    var o2=audioCtx.createOscillator();
-    var g2=audioCtx.createGain();
-    // Harmonic at ~2.5x fundamental — glassy ring
+    var o2=audioCtx.createOscillator();var g2=audioCtx.createGain();
     var harmFreq=baseFreq*2.2+Math.random()*800;
-    o2.type='sine';
-    o2.frequency.setValueAtTime(harmFreq,t+0.002);
+    o2.type='sine';o2.frequency.setValueAtTime(harmFreq,t+0.002);
     o2.frequency.exponentialRampToValueAtTime(harmFreq*0.7,t+0.18);
-
-    var vol2=vol*0.25;
-    g2.gain.setValueAtTime(0,t);
+    var vol2=vol*0.25;g2.gain.setValueAtTime(0,t);
     g2.gain.linearRampToValueAtTime(vol2,t+0.005);
     g2.gain.exponentialRampToValueAtTime(0.0001,t+0.2+Math.random()*0.12);
-
-    o2.connect(g2);
-    g2.connect(audioCtx.destination);
-    o2.start(t);
-    o2.stop(t+0.4);
+    o2.connect(g2);g2.connect(audioCtx.destination);o2.start(t);o2.stop(t+0.4);
   }
-
-  // --- Subtle low thud — gives physical weight/body ---
   if(Math.random()<0.3){
-    var o3=audioCtx.createOscillator();
-    var g3=audioCtx.createGain();
-    o3.type='sine';
-    o3.frequency.setValueAtTime(120+Math.random()*80,t);
+    var o3=audioCtx.createOscillator();var g3=audioCtx.createGain();
+    o3.type='sine';o3.frequency.setValueAtTime(120+Math.random()*80,t);
     o3.frequency.exponentialRampToValueAtTime(50,t+0.08);
-    var vol3=vol*0.5;
-    g3.gain.setValueAtTime(vol3,t);
+    var vol3=vol*0.5;g3.gain.setValueAtTime(vol3,t);
     g3.gain.exponentialRampToValueAtTime(0.0001,t+0.07);
-
-    o3.connect(g3);
-    g3.connect(audioCtx.destination);
-    o3.start(t);
-    o3.stop(t+0.1);
+    o3.connect(g3);g3.connect(audioCtx.destination);o3.start(t);o3.stop(t+0.1);
   }
-
-  // --- Rare sparkle — high tinkling for ASMR texture ---
   if(Math.random()<0.15){
     var delay=0.03+Math.random()*0.06;
-    var o4=audioCtx.createOscillator();
-    var g4=audioCtx.createGain();
-    o4.type='sine';
-    var sparkleFreq=3500+Math.random()*3000;
+    var o4=audioCtx.createOscillator();var g4=audioCtx.createGain();
+    o4.type='sine';var sparkleFreq=3500+Math.random()*3000;
     o4.frequency.setValueAtTime(sparkleFreq,t+delay);
     o4.frequency.exponentialRampToValueAtTime(sparkleFreq*0.5,t+delay+0.2);
-    var vol4=vol*0.12;
-    g4.gain.setValueAtTime(0,t+delay);
+    var vol4=vol*0.12;g4.gain.setValueAtTime(0,t+delay);
     g4.gain.linearRampToValueAtTime(vol4,t+delay+0.005);
     g4.gain.exponentialRampToValueAtTime(0.0001,t+delay+0.25);
-
-    o4.connect(g4);
-    g4.connect(audioCtx.destination);
-    o4.start(t+delay);
-    o4.stop(t+delay+0.35);
+    o4.connect(g4);g4.connect(audioCtx.destination);o4.start(t+delay);o4.stop(t+delay+0.35);
   }
 }
 
@@ -487,33 +519,16 @@ function updateRollingSound(){
   if(!audioCtx)return;
   var count=physMarbles.length;
   if(count===0){rollActive=false;return;}
-
-  // Compute average speed
   var avgSpeed=0;
-  for(var i=0;i<count;i++){
-    var m=physMarbles[i];
-    avgSpeed+=Math.sqrt(m.vx*m.vx+m.vy*m.vy);
-  }
+  for(var i=0;i<count;i++){var m=physMarbles[i];avgSpeed+=Math.sqrt(m.vx*m.vx+m.vy*m.vy);}
   avgSpeed/=count;
-
   var speedFactor=Math.min(avgSpeed/(5*S),1.0);
   var countFactor=Math.min(count/8,1.0);
-
-  // Skip if marbles are barely moving
   if(speedFactor<0.05)return;
-
-  // Click rate: gentler spacing — not too dense, keep it pleasant
-  // Range: ~every 10 frames (sparse) to every 2 frames (busy)
   var clickInterval=Math.max(2,Math.round(10-8*countFactor*speedFactor));
-
-  if(tick%clickInterval===0){
-    spawnMarbleClick(countFactor*speedFactor,speedFactor);
-  }
-
-  // Gentle extra taps when many marbles — marble-on-marble contact
-  if(count>3&&speedFactor>0.2&&Math.random()<countFactor*speedFactor*0.15){
+  if(tick%clickInterval===0) spawnMarbleClick(countFactor*speedFactor,speedFactor);
+  if(count>3&&speedFactor>0.2&&Math.random()<countFactor*speedFactor*0.15)
     spawnMarbleClick(countFactor*speedFactor*0.5,speedFactor);
-  }
 }
 
 // === PARTICLES ===
@@ -525,7 +540,6 @@ function drawParticles(){for(var i=0;i<particles.length;i++){var p=particles[i];
 // === LAYOUT ===
 function computeLayout(){
   var cx=W/2;
-  // STOCK
   var sCal=cal.stock;
   var cols=6,rows=4;
   var bg2=5*S*sCal.s;
@@ -538,8 +552,6 @@ function computeLayout(){
   L.cols=cols;L.rows=rows;
   L.gameW=gameW;L.gameLeft=stockLeft;L.gameRight=stockLeft+gameW;
   L.sx=stockLeft;L.sy=46*S+sCal.dy*S;
-
-  // FUNNEL
   var fCal=cal.funnel;
   var funnelW=gameW*fCal.sw;
   var funnelCx=cx+fCal.dx*S;
@@ -553,7 +565,6 @@ function computeLayout(){
   L.funnelCx=funnelCx;
   L.funnelOpenW=32*S*fCal.sw;
   L.funnelBendY=L.funnelTop+L.funnelH*0.65;
-
   funnelWalls=[];
   var exitL=funnelCx-L.funnelOpenW/2;var exitR=funnelCx+L.funnelOpenW/2;
   funnelWalls.push({x1:funnelLeft,y1:L.sy,x2:funnelLeft,y2:L.funnelBendY});
@@ -563,8 +574,6 @@ function computeLayout(){
   funnelWalls.push({x1:0,y1:L.funnelBot,x2:exitL,y2:L.funnelBot});
   funnelWalls.push({x1:exitR,y1:L.funnelBot,x2:W,y2:L.funnelBot});
   funnelWalls.push({x1:exitL,y1:L.funnelBot,x2:exitR,y2:L.funnelBot,isPlug:true});
-
-  // BELT
   var bCal=cal.belt;
   var beltW=gameW*bCal.sw;
   var beltCx=cx+bCal.dx*S;
@@ -577,7 +586,6 @@ function computeLayout(){
   L.beltTopY=beltTopY;L.beltBotY=beltBotY;
   L.beltLeft=beltLeft;L.beltRight=beltLeft+beltW;
   L.beltCx=beltCx;L.beltGap=beltGap;L.uR=uR;
-
   beltPath=[];var segs=200;
   var topLen=Math.max(1,beltInnerRight-beltInnerLeft);var botLen=topLen;
   var uLen=Math.PI*uR;var perim=topLen+botLen+2*uLen;
@@ -590,8 +598,6 @@ function computeLayout(){
     else{a=((d-s3)/uLen)*Math.PI;x=beltInnerLeft-Math.sin(a)*uR;y=beltBotY-uR+Math.cos(a)*uR;}
     beltPath.push({x:x,y:y});
   }
-
-  // SORT
   var oCal=cal.sort;
   var sortW=gameW*oCal.s;
   var sortCx=cx+oCal.dx*S;
@@ -600,14 +606,11 @@ function computeLayout(){
   L.sBh=32*S*oCal.s;L.sGap=3*S*oCal.s;L.sColGap=7*S*oCal.s;
   var stw=4*L.sBw+3*L.sColGap;
   L.sSx=sortCx-stw/2;
-
-  // BACK BUTTON
   var bkCal=cal.back;
   var bkSize=40*S*bkCal.s;
   L.bkX=L.gameLeft+8*S+bkCal.dx*S;
   L.bkY=10*S+bkCal.dy*S;
   L.bkSize=bkSize;
-
   L.sortBeltT=[];
   for(var c=0;c<4;c++){
     var colCx=L.sSx+c*(L.sBw+L.sColGap)+L.sBw/2;
@@ -690,13 +693,8 @@ function getBeltEntryT(){
 // === OBSTACLES ===
 function getCupWalls(ob){
   var hw=ob.w/2;var left=ob.x-hw;var right=ob.x+hw;var top=ob.y;var bot=ob.y+ob.h;
-  var walls=[
-    {x1:left,y1:top,x2:left,y2:bot},    // left wall
-    {x1:right,y1:top,x2:right,y2:bot}    // right wall
-  ];
-  if(!ob.released){
-    walls.push({x1:left,y1:bot,x2:right,y2:bot}); // bottom — only when closed
-  }
+  var walls=[{x1:left,y1:top,x2:left,y2:bot},{x1:right,y1:top,x2:right,y2:bot}];
+  if(!ob.released) walls.push({x1:left,y1:bot,x2:right,y2:bot});
   return walls;
 }
 function updateObstacles(){
@@ -704,61 +702,41 @@ function updateObstacles(){
     var ob=obstacles[i];
     if(ob.type==='cup'){
       if(ob.released)continue;
-      // Smooth ping-pong movement
       ob.phase+=ob.speed*0.012*S;
       var t=Math.sin(ob.phase);
       var prevX=ob.x;
       ob.x=ob.trackCx+t*ob.trackHalfW;
       var dx=ob.x-prevX;
-      // Push trapped marbles with the cup
-      for(var j=0;j<ob.trapped.length;j++){
-        ob.trapped[j].x+=dx;
-      }
+      for(var j=0;j<ob.trapped.length;j++) ob.trapped[j].x+=dx;
     }
     if(ob.type==='gate'){
-      // Smooth rotation towards target angle
       var adiff=ob.targetAngle-ob.angle;
-      if(Math.abs(adiff)>0.002){
-        ob.angle+=adiff*0.08;
-      } else {
-        ob.angle=ob.targetAngle;
-      }
+      if(Math.abs(adiff)>0.002) ob.angle+=adiff*0.08;
+      else ob.angle=ob.targetAngle;
       if(ob.switchT>0)ob.switchT=Math.max(0,ob.switchT-0.025);
     }
     if(ob.type==='trapdoor'){
       ob.timer++;
       var half=ob.interval/2;
       var leftOpen=(ob.timer%ob.interval)>=half;
-      // Detect transition
       if(leftOpen!==ob.prevLeftOpen){
-        ob.prevLeftOpen=leftOpen;
-        ob.switchT=1.0;
-        sfx.pop();
-        // Release marbles from the cup that just opened, close the other
+        ob.prevLeftOpen=leftOpen;ob.switchT=1.0;sfx.pop();
         for(var ci=0;ci<ob.cups.length;ci++){
           var cup=ob.cups[ci];
           var shouldOpen=(cup.side==='left')?leftOpen:!leftOpen;
           if(shouldOpen&&!cup.open){
-            // This cup is opening — release trapped marbles
             cup.open=true;
             for(var mj=0;mj<cup.trapped.length;mj++){
-              var m=cup.trapped[mj];
-              m.inCup=false;
-              m.vy=1*S+Math.random()*2*S;
-              m.vx=(Math.random()-0.5)*2*S;
+              var m=cup.trapped[mj];m.inCup=false;
+              m.vy=1*S+Math.random()*2*S;m.vx=(Math.random()-0.5)*2*S;
               spawnBurst(m.x,m.y,COLORS[m.ci].fill,4);
             }
             cup.trapped=[];
-          } else if(!shouldOpen&&cup.open){
-            // This cup is closing
-            cup.open=false;
-          }
+          } else if(!shouldOpen&&cup.open) cup.open=false;
         }
       }
-      // Animate openT for smooth bottom transition
       for(var ci=0;ci<ob.cups.length;ci++){
-        var cup=ob.cups[ci];
-        var target=cup.open?1:0;
+        var cup=ob.cups[ci];var target=cup.open?1:0;
         cup.openT+=(target-cup.openT)*0.15;
         if(Math.abs(cup.openT-target)<0.01)cup.openT=target;
       }
@@ -770,10 +748,7 @@ function getObstacleWalls(){
   var walls=[];
   for(var i=0;i<obstacles.length;i++){
     var ob=obstacles[i];
-    if(ob.type==='cup'&&!ob.released){
-      var cw=getCupWalls(ob);
-      for(var j=0;j<cw.length;j++)walls.push(cw[j]);
-    }
+    if(ob.type==='cup'&&!ob.released){var cw=getCupWalls(ob);for(var j=0;j<cw.length;j++)walls.push(cw[j]);}
     if(ob.type==='gate'){
       var endX=ob.pivotX+Math.sin(ob.angle)*ob.barLen;
       var endY=ob.pivotY+Math.cos(ob.angle)*ob.barLen;
@@ -781,17 +756,12 @@ function getObstacleWalls(){
     }
     if(ob.type==='trapdoor'){
       for(var ci=0;ci<ob.cups.length;ci++){
-        var cup=ob.cups[ci];
-        var hw=cup.w/2;var left=cup.x-hw;var right=cup.x+hw;
+        var cup=ob.cups[ci];var hw=cup.w/2;var left=cup.x-hw;var right=cup.x+hw;
         var top2=cup.y;var bot2=cup.y+cup.h;
-        // Side walls always present
         walls.push({x1:left,y1:top2,x2:left,y2:bot2});
         walls.push({x1:right,y1:top2,x2:right,y2:bot2});
-        // Bottom wall only when closed (openT < 0.5)
         if(cup.openT<0.5){
-          // Bottom splits apart based on openT
-          var split=cup.openT*2*hw*0.6;
-          var midX=cup.x;
+          var split=cup.openT*2*hw*0.6;var midX=cup.x;
           walls.push({x1:left,y1:bot2,x2:midX-split,y2:bot2});
           walls.push({x1:midX+split,y1:bot2,x2:right,y2:bot2});
         }
@@ -807,49 +777,36 @@ function checkCupTrapping(){
       if(ob.released)continue;
       var hw=ob.w/2;var left=ob.x-hw;var right=ob.x+hw;var top=ob.y;var bot=ob.y+ob.h;
       for(var mi=0;mi<physMarbles.length;mi++){
-        var m=physMarbles[mi];
-        if(m.inCup)continue;
+        var m=physMarbles[mi];if(m.inCup)continue;
         if(m.x>left+m.r*0.5&&m.x<right-m.r*0.5&&m.y>top+m.r&&m.y<bot){
-          m.inCup=true;
-          if(ob.trapped.indexOf(m)<0) ob.trapped.push(m);
+          m.inCup=true;if(ob.trapped.indexOf(m)<0) ob.trapped.push(m);
         }
       }
     }
     if(ob.type==='trapdoor'){
       for(var ci=0;ci<ob.cups.length;ci++){
-        var cup=ob.cups[ci];
-        if(cup.open)continue; // open cups don't trap
+        var cup=ob.cups[ci];if(cup.open)continue;
         var hw2=cup.w/2;var left2=cup.x-hw2;var right2=cup.x+hw2;var top2=cup.y;var bot2=cup.y+cup.h;
         for(var mi=0;mi<physMarbles.length;mi++){
-          var m=physMarbles[mi];
-          if(m.inCup)continue;
+          var m=physMarbles[mi];if(m.inCup)continue;
           if(m.x>left2+m.r*0.5&&m.x<right2-m.r*0.5&&m.y>top2+m.r&&m.y<bot2){
-            m.inCup=true;
-            if(cup.trapped.indexOf(m)<0) cup.trapped.push(m);
+            m.inCup=true;if(cup.trapped.indexOf(m)<0) cup.trapped.push(m);
           }
         }
       }
     }
   }
 }
-
 function releaseCupMarbles(){
   for(var oi=0;oi<obstacles.length;oi++){
-    var ob=obstacles[oi];
-    if(ob.type!=='cup')continue;
-    ob.released=true;
-    ob.releaseT=1.0; // animation timer for cup bottom opening
-    // Free all trapped marbles
+    var ob=obstacles[oi];if(ob.type!=='cup')continue;
+    ob.released=true;ob.releaseT=1.0;
     for(var j=0;j<ob.trapped.length;j++){
-      var m=ob.trapped[j];
-      m.inCup=false;
-      // Give a slight random nudge so they fall out
-      m.vy=1*S+Math.random()*2*S;
-      m.vx=(Math.random()-0.5)*2*S;
+      var m=ob.trapped[j];m.inCup=false;
+      m.vy=1*S+Math.random()*2*S;m.vx=(Math.random()-0.5)*2*S;
       spawnBurst(m.x,m.y,COLORS[m.ci].fill,4);
     }
-    ob.trapped=[];
-    sfx.pop();
+    ob.trapped=[];sfx.pop();
   }
 }
 
@@ -885,7 +842,6 @@ function physicsStep(){
             m.vx-=vt*(1-PHYS_FRICTION)*tx;m.vy-=vt*(1-PHYS_FRICTION)*ty;}}
       }
     }
-    // Obstacle wall collisions (computed once per substep)
     var obWalls=getObstacleWalls();
     for(var i=0;i<physMarbles.length;i++){var m=physMarbles[i];
       for(var w=0;w<obWalls.length;w++){var wall=obWalls[w];
@@ -900,7 +856,7 @@ function physicsStep(){
   }
   var exitY=L.funnelBot;var exitL2=L.funnelCx-L.funnelOpenW/2;var exitR2=L.funnelCx+L.funnelOpenW/2;
   for(var i=physMarbles.length-1;i>=0;i--){var m=physMarbles[i];
-    if(m.inCup)continue; // trapped marbles never exit
+    if(m.inCup)continue;
     if(m.y+m.r>=exitY-3*S&&m.x>exitL2-m.r&&m.x<exitR2+m.r){
       var entryT=getBeltEntryT();var bestIdx=-1,bestDist=Infinity;
       for(var k=0;k<BELT_SLOTS;k++){if(beltSlots[k].marble>=0)continue;
@@ -910,17 +866,13 @@ function physicsStep(){
         beltSlots[bestIdx].marble=m.ci;beltSlots[bestIdx].arriveAnim=0.6;
         sfx.drop();spawnBurst(m.x,m.y,COLORS[m.ci].fill,6);
         physMarbles.splice(i,1);
-        // Count marble for gate obstacles
         for(var gi=0;gi<obstacles.length;gi++){
-          var gate=obstacles[gi];
-          if(gate.type!=='gate')continue;
+          var gate=obstacles[gi];if(gate.type!=='gate')continue;
           gate.counter++;
           if(gate.counter>=gate.triggerCount){
-            gate.counter=0;
-            gate.side*=-1;
+            gate.counter=0;gate.side*=-1;
             gate.targetAngle=(gate.side<0)?gate.angleLeft:gate.angleRight;
-            gate.switchT=1.0;
-            sfx.pop();
+            gate.switchT=1.0;sfx.pop();
             spawnBurst(gate.pivotX,gate.pivotY,'#FFD700',12);
           }
         }
@@ -928,7 +880,7 @@ function physicsStep(){
     }
   }
 }
-// Snake order for 3x3 grid: top-left → top-right, right → left, left → right
+
 var SNAKE_ORDER=[
   {r:0,c:0},{r:0,c:1},{r:0,c:2},
   {r:1,c:2},{r:1,c:1},{r:1,c:0},
@@ -940,22 +892,21 @@ function spawnPhysMarbles(box){
   var count=box.remaining;
   for(var idx=0;idx<count;idx++){(function(i,b){
     setTimeout(function(){if(b.remaining<=0)return;
-      var si=SNAKE_ORDER[MRB_PER_BOX-b.remaining]; // current snake position
+      var si=SNAKE_ORDER[MRB_PER_BOX-b.remaining];
       b.remaining--;b.spawnIdx=MRB_PER_BOX-b.remaining;
       var MR=getMR();
       var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
       var mx=b.x+L.bw/2+(si.c-1)*mg;
       var my=b.y+L.bh/2+(si.r-1)*mgY-2*S;
       var vx=(Math.random()-0.5)*2*S;
-      var vy=-(2+Math.random()*2)*S; // pop upward
+      var vy=-(2+Math.random()*2)*S;
       physMarbles.push({x:mx,y:my,vx:vx,vy:vy,ci:b.ci,r:MR,spawnT:1.0});
-      sfx.drop();
-      spawnBurst(mx,my,COLORS[b.ci].fill,4);
+      sfx.drop();spawnBurst(mx,my,COLORS[b.ci].fill,4);
       if(b.remaining<=0){
-        b.emptyT=1.0; // start empty transition
+        b.emptyT=1.0;
         setTimeout(function(){b.used=true;b.spawning=false;},300);
       }
-    },i*120); // slightly slower for more satisfying rhythm
+    },i*120);
   })(idx,box);}
 }
 
@@ -963,6 +914,12 @@ function spawnPhysMarbles(box){
 function shuffle(arr){for(var i=arr.length-1;i>0;i--){var j=~~(Math.random()*(i+1));var tmp=arr[i];arr[i]=arr[j];arr[j]=tmp;}}
 function initGame(){
   won=false;score=0;particles=[];physMarbles=[];jumpers=[];tick=0;hoverIdx=-1;
+  // Reset frenzy
+  frenzyMode=false;frenzyT=0;frenzyStartTick=0;frenzySpeedMult=1;
+  frenzyShakeX=0;frenzyShakeY=0;frenzySparkTimer=0;frenzyBannerShown=false;frenzyStreaks=[];
+  document.getElementById('frenzy-banner').classList.remove('show');
+  document.getElementById('frenzy-vignette').classList.remove('show');
+
   document.getElementById('win-screen').classList.remove('show');
   computeLayout();initBeltSlots();
   var cl=[];for(var c=0;c<4;c++)for(var n=0;n<STOCK_PER_CLR;n++)cl.push(c);shuffle(cl);
@@ -979,83 +936,48 @@ function initGame(){
   shuffle(allBoxes);
   sortCols=[];
   for(var c=0;c<4;c++){var col2=[];for(var r=0;r<SORT_PER_CLR;r++)col2.push(allBoxes[c*SORT_PER_CLR+r]);sortCols.push(col2);}
-  // Insert lock buttons if level has them
   var lvl=LEVELS[currentLevel];
   var numLocks=lvl.lockButtons||0;
   for(var li2=0;li2<numLocks;li2++){
-    // Pick a random column and insert at a position between row 2-5 so it's reachable but not trivial
     var lockCol=Math.floor(Math.random()*4);
     var lockRow=2+Math.floor(Math.random()*4);
     lockRow=Math.min(lockRow,sortCols[lockCol].length);
     sortCols[lockCol].splice(lockRow,0,{type:'lock',ci:-1,filled:0,popT:0,vis:true,shineT:0,squishT:0,triggerT:0,triggered:false});
   }
-  // Init obstacles from level data
   obstacles=[];
-  var lvl=LEVELS[currentLevel];
   if(lvl.obstacles){
     for(var oi=0;oi<lvl.obstacles.length;oi++){
       var def=lvl.obstacles[oi];
       if(def.type==='cup'){
         var cupW=72*S;var cupH=50*S;var cupWall=4*S;
         var trackY=L.funnelTop+(L.funnelBendY-L.funnelTop)*def.yPct;
-        // Funnel width at trackY (above the bend, so it's the full width)
-        var fLeft=L.funnelLeft+cupW*0.1;
-        var fRight=L.funnelRight-cupW*0.1;
-        var trackCx=(fLeft+fRight)/2;
-        var trackHalfW=(fRight-fLeft-cupW)/2;
-        obstacles.push({
-          type:'cup',
-          x:trackCx, y:trackY,
-          w:cupW, h:cupH, wallThick:cupWall,
-          trackCx:trackCx, trackHalfW:trackHalfW,
-          speed:def.speed||0.5,
-          phase:0, dir:1,
-          trapped:[], // marbles trapped in cup
-          released:false, releaseT:0
-        });
+        var fLeft=L.funnelLeft+cupW*0.1;var fRight=L.funnelRight-cupW*0.1;
+        var trackCx=(fLeft+fRight)/2;var trackHalfW=(fRight-fLeft-cupW)/2;
+        obstacles.push({type:'cup',x:trackCx,y:trackY,w:cupW,h:cupH,wallThick:cupWall,
+          trackCx:trackCx,trackHalfW:trackHalfW,speed:def.speed||0.5,
+          phase:0,dir:1,trapped:[],released:false,releaseT:0});
       }
       if(def.type==='gate'){
         var gyPct=def.yPct||0.2;
         var gateY=L.funnelBendY+(L.funnelBot-L.funnelBendY)*gyPct;
         var barLen=(L.funnelBot-gateY)*1.12;
-        var angleLeft=-0.85;
-        var angleRight=0.85;
-        obstacles.push({
-          type:'gate',
-          pivotX:L.funnelCx, pivotY:gateY,
-          barLen:barLen,
-          angle:angleLeft,
-          targetAngle:angleLeft,
-          angleLeft:angleLeft,
-          angleRight:angleRight,
-          side:-1,
-          triggerCount:def.triggerCount||3,
-          counter:0,
-          switchT:0,
-          yPct:gyPct
-        });
+        var angleLeft=-0.85;var angleRight=0.85;
+        obstacles.push({type:'gate',pivotX:L.funnelCx,pivotY:gateY,barLen:barLen,
+          angle:angleLeft,targetAngle:angleLeft,angleLeft:angleLeft,angleRight:angleRight,
+          side:-1,triggerCount:def.triggerCount||3,counter:0,switchT:0,yPct:gyPct});
       }
       if(def.type==='trapdoor'){
         var tdYPct=def.yPct||0.4;
         var tdY=L.funnelTop+(L.funnelBendY-L.funnelTop)*tdYPct;
         var fW=L.funnelRight-L.funnelLeft;
-        var cupW=fW*0.34;
-        var cupH=55*S;
-        var gap=fW*0.18;
-        var leftX=L.funnelLeft+cupW/2+6*S;
-        var rightX=L.funnelRight-cupW/2-6*S;
-        obstacles.push({
-          type:'trapdoor',
-          yPct:tdYPct,
-          interval:def.interval||240,
-          timer:0,
-          prevLeftOpen:false,
-          switchT:0,
+        var cupW2=fW*0.34;var cupH2=55*S;
+        var leftX=L.funnelLeft+cupW2/2+6*S;var rightX=L.funnelRight-cupW2/2-6*S;
+        obstacles.push({type:'trapdoor',yPct:tdYPct,interval:def.interval||240,timer:0,
+          prevLeftOpen:false,switchT:0,
           cups:[
-            {side:'left', x:leftX, y:tdY, w:cupW, h:cupH, wallThick:4*S, open:false, openT:0, trapped:[]},
-            {side:'right',x:rightX,y:tdY, w:cupW, h:cupH, wallThick:4*S, open:true,  openT:1, trapped:[]}
-          ]
-        });
+            {side:'left',x:leftX,y:tdY,w:cupW2,h:cupH2,wallThick:4*S,open:false,openT:0,trapped:[]},
+            {side:'right',x:rightX,y:tdY,w:cupW2,h:cupH2,wallThick:4*S,open:true,openT:1,trapped:[]}
+          ]});
       }
     }
   }
@@ -1072,20 +994,14 @@ function isBoxTappable(idx){
 // === INPUT ===
 function handleTap(px,py){
   if(won||!gameActive)return;ensureAudio();
-  // Back to level select button
-  if(px>=L.bkX&&px<=L.bkX+L.bkSize&&py>=L.bkY&&py<=L.bkY+L.bkSize){
-    showLevelSelect();return;
-  }
+  if(px>=L.bkX&&px<=L.bkX+L.bkSize&&py>=L.bkY&&py<=L.bkY+L.bkSize){showLevelSelect();return;}
   for(var i=0;i<stock.length;i++){
     var b=stock[i];if(b.used||b.spawning||b.revealT>0)continue;
     if(px>=b.x&&px<=b.x+L.bw&&py>=b.y&&py<=b.y+L.bh){
       if(!isBoxTappable(i)){b.shakeT=0.5;return;}
-      // Satisfying tap pop — box squishes then marbles start flying
-      b.popT=1;
-      sfx.pop();
+      b.popT=1;sfx.pop();
       spawnBurst(b.x+L.bw/2,b.y+L.bh/2,COLORS[b.ci].fill,18);
-      spawnPhysMarbles(b);
-      return;
+      spawnPhysMarbles(b);return;
     }
   }
 }
@@ -1093,17 +1009,161 @@ canvas.addEventListener('click',function(e){handleTap(e.clientX,e.clientY);});
 canvas.addEventListener('touchstart',function(e){e.preventDefault();handleTap(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
 document.getElementById('cal-panel').addEventListener('touchstart',function(e){e.stopPropagation();},{passive:false});
 canvas.addEventListener('mousemove',function(e){
-  hoverIdx=-1;
-  if(!gameActive)return;
-  // Back button hover
+  hoverIdx=-1;if(!gameActive)return;
   if(e.clientX>=L.bkX&&e.clientX<=L.bkX+L.bkSize&&e.clientY>=L.bkY&&e.clientY<=L.bkY+L.bkSize){
-    canvas.style.cursor='pointer';return;
-  }
+    canvas.style.cursor='pointer';return;}
   for(var i=0;i<stock.length;i++){var b=stock[i];if(b.used||b.spawning||b.revealT>0)continue;
     if(!isBoxTappable(i))continue;
     if(e.clientX>=b.x&&e.clientX<=b.x+L.bw&&e.clientY>=b.y&&e.clientY<=b.y+L.bh){hoverIdx=i;break;}}
   canvas.style.cursor=hoverIdx>=0?'pointer':'default';
 });
+
+// === FRENZY DETECTION & UPDATE ===
+function checkAllBoxesOpened(){
+  for(var i=0;i<stock.length;i++){
+    if(!stock[i].used && !stock[i].spawning) return false;
+  }
+  return true;
+}
+
+function triggerFrenzy(){
+  if(frenzyMode)return;
+  frenzyMode=true;
+  frenzyStartTick=tick;
+  frenzyT=0;
+  frenzyBannerShown=true;
+  document.getElementById('frenzy-banner').classList.add('show');
+  document.getElementById('frenzy-vignette').classList.add('show');
+  sfx.frenzyStart();
+  // Big burst from belt center
+  spawnConfetti(L.beltCx,L.beltTopY,40);
+  spawnBurst(L.beltCx,L.beltTopY,'#FF6B00',20);
+  // Side bursts
+  spawnConfetti(L.beltLeft,L.beltTopY,20);
+  spawnConfetti(L.beltRight,L.beltTopY,20);
+}
+
+function updateFrenzy(){
+  if(!frenzyMode)return;
+  var elapsed=tick-frenzyStartTick;
+  // Ramp up over ~120 frames (~2 seconds)
+  frenzyT=Math.min(1,elapsed/120);
+  // Ease-out for satisfying acceleration curve
+  var eased=1-Math.pow(1-frenzyT,3);
+  frenzySpeedMult=1+(frenzyTargetMult-1)*eased;
+
+  // Screen shake — subtle, intensity scales with speed
+  var shakeIntensity=2*S*frenzyT;
+  frenzyShakeX=(Math.random()-0.5)*shakeIntensity;
+  frenzyShakeY=(Math.random()-0.5)*shakeIntensity*0.6;
+
+  // Spawn speed streaks along the belt
+  frenzySparkTimer++;
+  var streakRate=Math.max(1,Math.floor(6-5*frenzyT));
+  if(frenzySparkTimer%streakRate===0){
+    // Pick a random point on the top part of belt
+    var ri=Math.floor(Math.random()*Math.floor(beltPath.length*0.45));
+    var bp=beltPath[ri];
+    if(bp){
+      var streakColors=['#FF6B00','#FFB545','#FF4E8C','#FFD700','#FF8C00'];
+      frenzyStreaks.push({
+        x:bp.x+(Math.random()-0.5)*20*S,
+        y:bp.y+(Math.random()-0.5)*10*S,
+        vx:(Math.random()-0.5)*1*S,
+        vy:-1.5*S-Math.random()*2*S,
+        r:(1.5+Math.random()*3)*S,
+        color:streakColors[~~(Math.random()*streakColors.length)],
+        life:1,decay:0.03+Math.random()*0.02
+      });
+    }
+  }
+
+  // Emit sparks from belt slots that have marbles
+  if(frenzyT>0.3&&frenzySparkTimer%4===0){
+    for(var i=0;i<BELT_SLOTS;i++){
+      if(beltSlots[i].marble<0)continue;
+      if(Math.random()>0.3*frenzyT)continue;
+      var pos=getSlotPos(i);
+      particles.push({
+        x:pos.x,y:pos.y,
+        vx:(Math.random()-0.5)*2*S,
+        vy:-Math.random()*3*S,
+        r:(1+Math.random()*2)*S,
+        color:COLORS[beltSlots[i].marble].light,
+        life:0.6,decay:0.04+Math.random()*0.02,grav:false
+      });
+    }
+  }
+
+  // Rhythmic audio ticks
+  var tickRate=Math.max(6,Math.floor(20-14*frenzyT));
+  if(tick%tickRate===0) sfx.frenzyTick();
+
+  // Update frenzy streaks
+  for(var i=frenzyStreaks.length-1;i>=0;i--){
+    var s=frenzyStreaks[i];
+    s.x+=s.vx;s.y+=s.vy;s.life-=s.decay;s.r*=0.98;
+    if(s.life<=0)frenzyStreaks.splice(i,1);
+  }
+}
+
+function drawFrenzyEffects(){
+  if(!frenzyMode)return;
+
+  // Draw speed streaks
+  for(var i=0;i<frenzyStreaks.length;i++){
+    var s=frenzyStreaks[i];
+    ctx.globalAlpha=Math.max(0,s.life)*0.7;
+    ctx.fillStyle=s.color;
+    // Elongated streak shape
+    ctx.save();
+    var angle=Math.atan2(s.vy,s.vx);
+    ctx.translate(s.x,s.y);
+    ctx.rotate(angle);
+    ctx.beginPath();
+    ctx.ellipse(0,0,s.r*2.5,s.r*0.6,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha=1;
+
+  // Pulsing glow around the belt area
+  var glowAlpha=0.06+Math.sin(tick*0.1)*0.03;
+  glowAlpha*=frenzyT;
+  var beltCy=(L.beltTopY+L.beltBotY)/2;
+  var grad=ctx.createRadialGradient(L.beltCx,beltCy,10*S,L.beltCx,beltCy,120*S);
+  grad.addColorStop(0,'rgba(255,107,0,'+glowAlpha*2+')');
+  grad.addColorStop(0.5,'rgba(255,181,69,'+glowAlpha+')');
+  grad.addColorStop(1,'rgba(255,107,0,0)');
+  ctx.fillStyle=grad;
+  ctx.fillRect(L.beltLeft-60*S,L.beltTopY-40*S,(L.beltRight-L.beltLeft)+120*S,(L.beltBotY-L.beltTopY)+80*S);
+
+  // Speed multiplier indicator
+  if(frenzyT>0.1){
+    var multText='x'+frenzySpeedMult.toFixed(1);
+    var fontSize=Math.floor(14*S+4*S*frenzyT);
+    ctx.font='bold '+fontSize+'px Fredoka';
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    var textX=L.beltCx;
+    var textY=L.beltTopY-18*S;
+    var pulse=1+Math.sin(tick*0.12)*0.08*frenzyT;
+    ctx.save();
+    ctx.translate(textX,textY);
+    ctx.scale(pulse,pulse);
+    // Glow
+    ctx.shadowColor='rgba(255,107,0,0.8)';
+    ctx.shadowBlur=12*S*frenzyT;
+    ctx.fillStyle='#FF6B00';
+    ctx.fillText(multText,0,0);
+    ctx.shadowColor='transparent';ctx.shadowBlur=0;
+    // White inner
+    ctx.fillStyle='#FFF';
+    ctx.globalAlpha=0.8;
+    ctx.fillText(multText,0,0);
+    ctx.globalAlpha=1;
+    ctx.restore();
+  }
+}
 
 // === UPDATE ===
 function getSortBoxY(ci,vi){return L.sTop+vi*(L.sBh+L.sGap);}
@@ -1113,7 +1173,14 @@ function update(){
   updateObstacles();
   physicsStep();
   checkCupTrapping();
-  beltOffset=(beltOffset+BELT_SPEED*S)%1;
+
+  // === FRENZY: check trigger ===
+  if(!frenzyMode&&!won&&checkAllBoxesOpened()) triggerFrenzy();
+  updateFrenzy();
+
+  // === Belt offset with frenzy multiplier ===
+  beltOffset=(beltOffset+BELT_SPEED*S*frenzySpeedMult)%1;
+
   for(var i=0;i<BELT_SLOTS;i++){if(beltSlots[i].arriveAnim>0)beltSlots[i].arriveAnim=Math.max(0,beltSlots[i].arriveAnim-0.025);}
   for(var si=0;si<BELT_SLOTS;si++){
     var slot=beltSlots[si];if(slot.marble<0)continue;var slotT=getSlotT(si);
@@ -1121,7 +1188,6 @@ function update(){
       var col=sortCols[c];var tv=-1;
       for(var r=0;r<col.length;r++){if(col[r].vis){tv=r;break;}}
       if(tv<0||col[tv].ci!==slot.marble)continue;
-      // Count in-flight jumpers already heading to this column's top box
       var inFlight=0;
       for(var j=0;j<jumpers.length;j++){if(jumpers[j].targetCol===c)inFlight++;}
       if(col[tv].filled+inFlight>=SORT_CAP)continue;
@@ -1142,15 +1208,18 @@ function update(){
       for(var r=0;r<col.length;r++){if(col[r].vis){tv=r;break;}}
       if(tv>=0&&col[tv].ci===j.ci&&col[tv].filled<SORT_CAP){
         col[tv].filled++;col[tv].shineT=1;col[tv].squishT=1;score+=10;
+        // Bonus score during frenzy
+        if(frenzyMode) score+=Math.floor(10*frenzySpeedMult);
         var sx2=L.sSx+j.targetCol*(L.sBw+L.sColGap)+L.sBw/2+(j.targetSlot-1)*(L.sBw/4);
         var sy2=getSortBoxY(j.targetCol,0)+L.sBh/2;
-        spawnBurst(sx2,sy2,COLORS[j.ci].fill,8);sfx.sort();
+        spawnBurst(sx2,sy2,COLORS[j.ci].fill,frenzyMode?14:8);sfx.sort();
         if(col[tv].filled>=SORT_CAP){
           var cx2=L.sSx+j.targetCol*(L.sBw+L.sColGap)+L.sBw/2;
-          col[tv].popT=1;score+=50;sfx.complete();
-          spawnBurst(cx2,sy2,COLORS[j.ci].fill,28);
-          spawnConfetti(cx2,sy2,20);
-          // Starburst ring
+          col[tv].popT=1;score+=50;
+          if(frenzyMode) score+=Math.floor(50*frenzySpeedMult);
+          sfx.complete();
+          spawnBurst(cx2,sy2,COLORS[j.ci].fill,frenzyMode?40:28);
+          spawnConfetti(cx2,sy2,frenzyMode?35:20);
           for(var p=0;p<12;p++){
             var a=Math.PI*2*p/12;var sp=5+Math.random()*3;
             particles.push({x:cx2,y:sy2,vx:Math.cos(a)*sp*S,vy:Math.sin(a)*sp*S,
@@ -1167,20 +1236,16 @@ function update(){
     if(b.popT>0)b.popT=Math.max(0,b.popT-0.025);
     if(b.revealT>0)b.revealT=Math.max(0,b.revealT-0.03);
     if(b.emptyT>0)b.emptyT=Math.max(0,b.emptyT-0.025);
-    // Auto-reveal: detect when a locked box becomes the bottom-most unused in its column
     if(!b.used&&!b.revealed&&!b.spawning&&b.revealT<=0){
       var col=i%L.cols;var isBottom=true;
       for(var r2=Math.floor(i/L.cols)+1;r2<L.rows;r2++){
         if(!stock[r2*L.cols+col].used){isBottom=false;break;}
       }
       if(isBottom){
-        b.revealed=true;
-        b.revealT=1.0;
-        // Gift unwrap particles
+        b.revealed=true;b.revealT=1.0;
         var bx2=b.x+L.bw/2,by2=b.y+L.bh/2;
         for(var p=0;p<16;p++){
-          var a2=Math.PI*2*p/16+Math.random()*0.3;
-          var sp2=3+Math.random()*5;
+          var a2=Math.PI*2*p/16+Math.random()*0.3;var sp2=3+Math.random()*5;
           var clr2=['#FFE4B5','#FFF8DC','#FAEBD7','#DEB887','#F5DEB3'][~~(Math.random()*5)];
           particles.push({x:bx2,y:by2,vx:Math.cos(a2)*sp2*S,vy:Math.sin(a2)*sp2*S,
             r:(3+Math.random()*5)*S,color:clr2,life:1,decay:0.015+Math.random()*0.015,grav:false});
@@ -1190,7 +1255,6 @@ function update(){
     }
     var th=(i===hoverIdx&&!b.used&&isBoxTappable(i))?1:0;b.hoverT+=(th-b.hoverT)*0.12;
   }
-  // Physics marble spawn bounce
   for(var i=0;i<physMarbles.length;i++){
     if(physMarbles[i].spawnT>0)physMarbles[i].spawnT=Math.max(0,physMarbles[i].spawnT-0.05);
   }
@@ -1206,30 +1270,15 @@ function update(){
     if(topVis<0)continue;
     var box=col[topVis];
     if(box.type==='lock'&&!box.triggered){
-      box.triggered=true;
-      box.triggerT=1.0;
-      box.shineT=1;
-      sfx.complete();
-      // Burst particles at the lock button position
-      var bx=L.sSx+c*(L.sBw+L.sColGap)+L.sBw/2;
-      var by=getSortBoxY(c,0)+L.sBh/2;
-      spawnBurst(bx,by,'#FFD700',20);
-      spawnConfetti(bx,by,15);
-      // Release all cup marbles after a short delay
+      box.triggered=true;box.triggerT=1.0;box.shineT=1;sfx.complete();
+      var bx=L.sSx+c*(L.sBw+L.sColGap)+L.sBw/2;var by=getSortBoxY(c,0)+L.sBh/2;
+      spawnBurst(bx,by,'#FFD700',20);spawnConfetti(bx,by,15);
       (function(boxRef,colRef,rowRef){
-        setTimeout(function(){
-          releaseCupMarbles();
-          boxRef.popT=1;
-        },300);
-        setTimeout(function(){
-          boxRef.vis=false;
-          checkWin();
-        },700);
+        setTimeout(function(){releaseCupMarbles();boxRef.popT=1;},300);
+        setTimeout(function(){boxRef.vis=false;checkWin();},700);
       })(box,col,topVis);
     }
-    if(box.type==='lock'&&box.triggerT>0){
-      box.triggerT=Math.max(0,box.triggerT-0.03);
-    }
+    if(box.type==='lock'&&box.triggerT>0) box.triggerT=Math.max(0,box.triggerT-0.03);
   }
   tickParticles();
   updateRollingSound();
@@ -1237,15 +1286,14 @@ function update(){
 function checkWin(){
   for(var c=0;c<sortCols.length;c++)for(var r=0;r<sortCols[c].length;r++)if(sortCols[c][r].vis)return;
   if(!won){won=true;sfx.win();
-    // Award stars (all levels are identical for now, always 3 stars)
     levelStars[currentLevel]=3;
-    // Unlock next level
-    if(currentLevel+1<LEVELS.length && unlockedLevels<=currentLevel+1){
-      unlockedLevels=currentLevel+2;
-    }
-    // Update win message
-    document.getElementById('win-msg').textContent='Level '+(currentLevel+1)+' complete!';
-    // Multi-wave confetti
+    if(currentLevel+1<LEVELS.length && unlockedLevels<=currentLevel+1) unlockedLevels=currentLevel+2;
+    // Enhanced win message with frenzy bonus
+    var bonusMsg=frenzyMode?' | Frenzy Bonus: x'+frenzySpeedMult.toFixed(1)+'!':'';
+    document.getElementById('win-msg').textContent='Level '+(currentLevel+1)+' complete! Score: '+score+bonusMsg;
+    // Hide frenzy UI
+    document.getElementById('frenzy-banner').classList.remove('show');
+    document.getElementById('frenzy-vignette').classList.remove('show');
     spawnConfetti(W/2,H/3,60);
     setTimeout(function(){spawnConfetti(W*0.3,H/2,40);},200);
     setTimeout(function(){spawnConfetti(W*0.7,H/2,40);},400);
@@ -1259,197 +1307,118 @@ function rRect(x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y
 function drawMarble(x,y,r,ci,es){
   var rs=r*(es||1)*2;
   ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.3)';
-  ctx.shadowBlur=rs*0.4;
-  ctx.shadowOffsetX=rs*0.08;
-  ctx.shadowOffsetY=rs*0.15;
+  ctx.shadowColor='rgba(0,0,0,0.3)';ctx.shadowBlur=rs*0.4;ctx.shadowOffsetX=rs*0.08;ctx.shadowOffsetY=rs*0.15;
   ctx.drawImage(marbleImg(ci),x-rs/2,y-rs/2,rs,rs);
   ctx.restore();
 }
-
 function drawBackground(){
-  // Plain background color fills everything (side padding)
-  ctx.fillStyle='#EDE5D8';
-  ctx.fillRect(0,0,W,H);
-  // Pick background image for current level
+  ctx.fillStyle='#EDE5D8';ctx.fillRect(0,0,W,H);
   var lvl=LEVELS[currentLevel];
   var bgKey='concept_bg_'+(lvl&&lvl.bg?lvl.bg:1);
   var bgImg=imgs[bgKey];
   if(!bgImg||!bgImg.naturalWidth)return;
-  var imgW=bgImg.naturalWidth;
-  var imgH=bgImg.naturalHeight;
-  var sc=H/imgH; // fit to height
-  var dw=imgW*sc;
-  var dh=H;
-  var dx=(W-dw)/2; // center horizontally
+  var imgW=bgImg.naturalWidth;var imgH=bgImg.naturalHeight;
+  var sc=H/imgH;var dw=imgW*sc;var dh=H;var dx=(W-dw)/2;
   L.bgScale=sc;L.bgX=dx;L.bgY=0;L.bgW=dw;L.bgH=dh;
   ctx.drawImage(bgImg,dx,0,dw,dh);
 }
-
 function drawStock(){
   for(var i=0;i<stock.length;i++){
     var b=stock[i],c=COLORS[b.ci];var ox=0;
     if(b.shakeT>0)ox=Math.sin(b.shakeT*28)*5*S*b.shakeT;
-
-    // Idle breathing for tappable boxes
     var breathe=0;
-    if(!b.used&&!b.spawning&&b.revealT<=0&&isBoxTappable(i)){
+    if(!b.used&&!b.spawning&&b.revealT<=0&&isBoxTappable(i))
       breathe=Math.sin(tick*0.04+b.idlePhase)*0.02;
-    }
-
-    var ps=1+b.popT*0.15+breathe;
-    var hs=1+b.hoverT*0.05;
-    var ts=ps*hs;
-
-    // Empty transition: shrink and fade out
+    var ps=1+b.popT*0.15+breathe;var hs=1+b.hoverT*0.05;var ts=ps*hs;
     if(b.used&&b.emptyT>0){
       ts*=0.7+0.3*(1-b.emptyT);
       ctx.save();ctx.globalAlpha=1-b.emptyT*0.3;
       ctx.translate(b.x+L.bw/2+ox,b.y+L.bh/2);ctx.scale(ts,ts);
       ctx.shadowColor='rgba(0,0,0,0.15)';ctx.shadowBlur=4*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=2*S;
       ctx.drawImage(imgs.box_empty,-L.bw/2,-L.bh/2,L.bw,L.bh);
-      ctx.restore();
-      continue;
+      ctx.restore();continue;
     }
-
-    ctx.save();
-    ctx.translate(b.x+L.bw/2+ox,b.y+L.bh/2);ctx.scale(ts,ts);
-
-    // Box drop shadow
+    ctx.save();ctx.translate(b.x+L.bw/2+ox,b.y+L.bh/2);ctx.scale(ts,ts);
     ctx.shadowColor='rgba(0,0,0,0.25)';ctx.shadowBlur=6*S;ctx.shadowOffsetX=2*S;ctx.shadowOffsetY=3*S;
-
     if(b.used){
-      // Fully empty — static
       ctx.drawImage(imgs.box_empty,-L.bw/2,-L.bh/2,L.bw,L.bh);
     } else if(b.revealT>0){
-      // === GIFT REVEAL ANIMATION ===
-      var rt=b.revealT; // 1.0→0.0
-      var phase=1-rt; // 0→1
-
+      var rt=b.revealT;var phase=1-rt;
       if(phase<0.5){
-        // Phase 1: Gift box wobbles and shakes
         var wobble=Math.sin(phase*Math.PI*8)*(1-phase*2)*6*S;
         var squash=1+Math.sin(phase*Math.PI*4)*0.08;
-        ctx.save();
-        ctx.rotate(wobble*0.02);
-        ctx.scale(squash,2-squash);
+        ctx.save();ctx.rotate(wobble*0.02);ctx.scale(squash,2-squash);
         ctx.drawImage(imgs.box_locked,-L.bw/2,-L.bh/2,L.bw,L.bh);
         ctx.restore();
       } else {
-        // Phase 2: Crossfade to colored box with scale pop
-        var t2=(phase-0.5)*2; // 0→1
-        var popScale=1+Math.sin(t2*Math.PI)*0.15;
-        ctx.save();
-        ctx.scale(popScale,popScale);
-        // Fade out gift
-        if(t2<0.4){
-          ctx.globalAlpha=1-t2*2.5;
-          ctx.drawImage(imgs.box_locked,-L.bw/2,-L.bh/2,L.bw,L.bh);
-          ctx.globalAlpha=t2*2.5;
-        }
-        // Colored box fades in
+        var t2=(phase-0.5)*2;var popScale=1+Math.sin(t2*Math.PI)*0.15;
+        ctx.save();ctx.scale(popScale,popScale);
+        if(t2<0.4){ctx.globalAlpha=1-t2*2.5;ctx.drawImage(imgs.box_locked,-L.bw/2,-L.bh/2,L.bw,L.bh);ctx.globalAlpha=t2*2.5;}
         ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
         ctx.globalAlpha=1;
-        // Draw marbles appearing
         ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
         if(b.remaining>0&&t2>0.3){
-          var mAlpha=Math.min(1,(t2-0.3)/0.4);
-          ctx.globalAlpha=mAlpha;
+          var mAlpha=Math.min(1,(t2-0.3)/0.4);ctx.globalAlpha=mAlpha;
           var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
-          for(var row=0;row<3;row++)for(var col2=0;col2<3;col2++){
-            drawMarble((col2-1)*mg,(row-1)*mgY-2*S,mr,b.ci);
-          }
-          // Redraw box front lip on top of marbles for depth
+          for(var row=0;row<3;row++)for(var col2=0;col2<3;col2++) drawMarble((col2-1)*mg,(row-1)*mgY-2*S,mr,b.ci);
           ctx.globalAlpha=1;
-          ctx.save();
-          var lipH2=L.bh*LIP_PCT;
-          ctx.beginPath();
-          ctx.rect(-L.bw/2,L.bh/2-lipH2,L.bw,lipH2);
-          ctx.clip();
-          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
-          ctx.restore();
+          ctx.save();var lipH2=L.bh*LIP_PCT;
+          ctx.beginPath();ctx.rect(-L.bw/2,L.bh/2-lipH2,L.bw,lipH2);ctx.clip();
+          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);ctx.restore();
         }
         ctx.restore();
       }
     } else {
       if(!b.revealed){
-        // Locked gift box with subtle idle wobble
-        var idleWobble=Math.sin(tick*0.02+b.idlePhase)*0.008;
-        ctx.rotate(idleWobble);
+        var idleWobble=Math.sin(tick*0.02+b.idlePhase)*0.008;ctx.rotate(idleWobble);
         ctx.drawImage(imgs.box_locked,-L.bw/2,-L.bh/2,L.bw,L.bh);
       } else {
-        // Revealed colored box
         var tappable=isBoxTappable(i);
         if(tappable&&b.hoverT>0.01){ctx.shadowColor=c.glow;ctx.shadowBlur=20*S*b.hoverT;}
         ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
-        // Clear shadow before drawing marbles on top
         ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
         if(b.remaining>0){
           var mr=Math.min(7*S,L.bw/8.5);var mg=Math.min(14*S,L.bw/4.2);var mgY=mg*MRB_GAP_FACTOR;
-          // Collect remaining marbles and sort by row so bottom rows draw last (on top for perspective)
-          var gone=MRB_PER_BOX-b.remaining;
-          var mrbsToDraw=[];
-          for(var si2=gone;si2<MRB_PER_BOX;si2++){
-            mrbsToDraw.push(SNAKE_ORDER[si2]);
-          }
+          var gone=MRB_PER_BOX-b.remaining;var mrbsToDraw=[];
+          for(var si2=gone;si2<MRB_PER_BOX;si2++) mrbsToDraw.push(SNAKE_ORDER[si2]);
           mrbsToDraw.sort(function(a,b2){return a.r-b2.r;});
-          for(var si2=0;si2<mrbsToDraw.length;si2++){
-            var sp=mrbsToDraw[si2];
-            drawMarble((sp.c-1)*mg,(sp.r-1)*mgY-2*S,mr,b.ci);
-          }
-          // Redraw box front lip on top of marbles for depth
-          ctx.save();
-          var lipH=L.bh*LIP_PCT;
-          ctx.beginPath();
-          ctx.rect(-L.bw/2,L.bh/2-lipH,L.bw,lipH);
-          ctx.clip();
-          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);
-          ctx.restore();
+          for(var si2=0;si2<mrbsToDraw.length;si2++){var sp=mrbsToDraw[si2];drawMarble((sp.c-1)*mg,(sp.r-1)*mgY-2*S,mr,b.ci);}
+          ctx.save();var lipH=L.bh*LIP_PCT;
+          ctx.beginPath();ctx.rect(-L.bw/2,L.bh/2-lipH,L.bw,lipH);ctx.clip();
+          ctx.drawImage(boxImg(b.ci),-L.bw/2,-L.bh/2,L.bw,L.bh);ctx.restore();
         }
       }
     }
     ctx.restore();
   }
 }
-
 function drawFunnelOverlay(){
   if(!imgs.funnel||!imgs.funnel.naturalWidth)return;
   var pad=12*S;
   ctx.drawImage(imgs.funnel,L.funnelLeft-pad,L.funnelTop-pad,(L.funnelRight-L.funnelLeft)+pad*2,L.funnelH+pad*2);
 }
-
 function drawPhysMarbles(){
   for(var i=0;i<physMarbles.length;i++){
-    var m=physMarbles[i];
-    if(m.inCup)continue; // drawn by drawObstacles instead
+    var m=physMarbles[i];if(m.inCup)continue;
     var bounce=m.spawnT>0?(1+Math.sin(m.spawnT*Math.PI)*0.4):1;
     drawMarble(m.x,m.y,m.r,m.ci,bounce);
   }
 }
-
 function drawBelt(){
   var slotR=8*S;var slotD=slotR*2.4;
   for(var i=0;i<BELT_SLOTS;i++){
     var pos=getSlotPos(i);var slot=beltSlots[i];
     ctx.save();
-    ctx.shadowColor='rgba(0,0,0,0.2)';
-    ctx.shadowBlur=4*S;
-    ctx.shadowOffsetX=1*S;
-    ctx.shadowOffsetY=2*S;
+    ctx.shadowColor='rgba(0,0,0,0.2)';ctx.shadowBlur=4*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=2*S;
     ctx.drawImage(imgs.belt_slot_empty,pos.x-slotD/2,pos.y-slotD/2,slotD,slotD);
     ctx.restore();
     if(slot.marble>=0){
-      // Elastic bounce on arrival
       var bs=1;
-      if(slot.arriveAnim>0){
-        var t2=1-slot.arriveAnim;
-        bs=1+Math.sin(t2*Math.PI*3)*0.3*slot.arriveAnim;
-      }
+      if(slot.arriveAnim>0){var t2=1-slot.arriveAnim;bs=1+Math.sin(t2*Math.PI*3)*0.3*slot.arriveAnim;}
       drawMarble(pos.x,pos.y,slotR*0.8*cal.marble.s,slot.marble,bs);
     }
   }
 }
-
 function drawJumpers(){
   var slotR=8*S;
   for(var i=0;i<jumpers.length;i++){
@@ -1459,9 +1428,7 @@ function drawJumpers(){
     var ty=getSortBoxY(j.targetCol,0)+L.sBh/2;
     var x=j.startX+(tx-j.startX)*e;
     var y=j.startY+(ty-j.startY)*e-Math.sin(t*Math.PI)*50*S;
-    // Scale pulse: bigger at peak of arc, smaller at ends
     var arcScale=1+Math.sin(t*Math.PI)*0.25;
-    // Trail particles
     if(tick%3===0){
       particles.push({x:x,y:y,vx:(Math.random()-0.5)*0.5*S,vy:0.5*S,
         r:(2+Math.random()*2)*S,color:COLORS[j.ci].light,life:0.6,decay:0.04,grav:false});
@@ -1469,7 +1436,6 @@ function drawJumpers(){
     drawMarble(x,y,slotR*0.8*cal.marble.s,j.ci,arcScale);
   }
 }
-
 function drawSortArea(){
   for(var c=0;c<4;c++){
     var col=sortCols[c];var x=L.sSx+c*(L.sBw+L.sColGap);
@@ -1481,73 +1447,34 @@ function drawSortArea(){
       var b=visibleBoxes[vi].box;var byy=getSortBoxY(c,vi);
       var ps=1+b.popT*0.25;var al=b.popT>0.6?(1-b.popT)*2.5:1;
       var sqX=1,sqY=1;
-      if(b.squishT>0){
-        var sq=Math.sin(b.squishT*Math.PI);
-        sqX=1+sq*0.12;sqY=1-sq*0.08;
-      }
+      if(b.squishT>0){var sq=Math.sin(b.squishT*Math.PI);sqX=1+sq*0.12;sqY=1-sq*0.08;}
       ctx.save();ctx.globalAlpha=Math.max(0,Math.min(1,al));
       ctx.translate(x+L.sBw/2,byy+L.sBh/2);ctx.scale(ps*sqX,ps*sqY);
-
       if(b.type==='lock'){
-        // === LOCK BUTTON ===
-        var isTop=(vi===0);
-        var pulse=isTop?1+Math.sin(tick*0.08)*0.03:1;
+        var isTop=(vi===0);var pulse=isTop?1+Math.sin(tick*0.08)*0.03:1;
         ctx.scale(pulse,pulse);
-
-        // Button body
-        ctx.shadowColor='rgba(0,0,0,0.25)';ctx.shadowBlur=5*S;
-        ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=3*S;
+        ctx.shadowColor='rgba(0,0,0,0.25)';ctx.shadowBlur=5*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=3*S;
         var grad=ctx.createLinearGradient(0,-L.sBh/2,0,L.sBh/2);
-        if(b.triggered){
-          grad.addColorStop(0,'#7BC67B');grad.addColorStop(1,'#4AA04A');
-        } else if(isTop){
-          grad.addColorStop(0,'#FFD966');grad.addColorStop(1,'#E8A84C');
-        } else {
-          grad.addColorStop(0,'#B8A898');grad.addColorStop(1,'#9A8A78');
-        }
-        ctx.fillStyle=grad;
-        rRect(-L.sBw/2,-L.sBh/2,L.sBw,L.sBh,8*S);ctx.fill();
-
-        // Clear shadow
+        if(b.triggered){grad.addColorStop(0,'#7BC67B');grad.addColorStop(1,'#4AA04A');}
+        else if(isTop){grad.addColorStop(0,'#FFD966');grad.addColorStop(1,'#E8A84C');}
+        else{grad.addColorStop(0,'#B8A898');grad.addColorStop(1,'#9A8A78');}
+        ctx.fillStyle=grad;rRect(-L.sBw/2,-L.sBh/2,L.sBw,L.sBh,8*S);ctx.fill();
         ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
-
-        // Shine effect
         if(b.shineT>0){ctx.fillStyle='rgba(255,255,255,'+b.shineT*0.5+')';rRect(-L.sBw/2,-L.sBh/2,L.sBw,L.sBh,8*S);ctx.fill();}
-
-        // Inner border highlight
         ctx.strokeStyle='rgba(255,255,255,0.3)';ctx.lineWidth=1*S;
         rRect(-L.sBw/2+2*S,-L.sBh/2+2*S,L.sBw-4*S,L.sBh-4*S,6*S);ctx.stroke();
-
-        // Lock icon (drawn with primitives)
-        var iconS=Math.min(L.sBh*0.35,L.sBw*0.15);
-        var lockX=0;var lockY=0;
+        var iconS=Math.min(L.sBh*0.35,L.sBw*0.15);var lockX=0;var lockY=0;
         if(!b.triggered){
-          // Lock body (rectangle)
-          ctx.fillStyle='rgba(0,0,0,0.35)';
-          rRect(lockX-iconS*0.6,lockY-iconS*0.2,iconS*1.2,iconS*0.9,2*S);ctx.fill();
-          // Lock shackle (arc)
+          ctx.fillStyle='rgba(0,0,0,0.35)';rRect(lockX-iconS*0.6,lockY-iconS*0.2,iconS*1.2,iconS*0.9,2*S);ctx.fill();
           ctx.strokeStyle='rgba(0,0,0,0.35)';ctx.lineWidth=2*S;ctx.lineCap='round';
-          ctx.beginPath();
-          ctx.arc(lockX,lockY-iconS*0.2,iconS*0.4,-Math.PI,0);
-          ctx.stroke();
-          // Keyhole
-          ctx.fillStyle='rgba(255,255,255,0.4)';
-          ctx.beginPath();ctx.arc(lockX,lockY+iconS*0.12,iconS*0.13,0,Math.PI*2);ctx.fill();
+          ctx.beginPath();ctx.arc(lockX,lockY-iconS*0.2,iconS*0.4,-Math.PI,0);ctx.stroke();
+          ctx.fillStyle='rgba(255,255,255,0.4)';ctx.beginPath();ctx.arc(lockX,lockY+iconS*0.12,iconS*0.13,0,Math.PI*2);ctx.fill();
         } else {
-          // Unlocked / check mark
           ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=3*S;ctx.lineCap='round';ctx.lineJoin='round';
-          ctx.beginPath();
-          ctx.moveTo(-iconS*0.5,0);
-          ctx.lineTo(-iconS*0.1,iconS*0.4);
-          ctx.lineTo(iconS*0.5,-iconS*0.3);
-          ctx.stroke();
+          ctx.beginPath();ctx.moveTo(-iconS*0.5,0);ctx.lineTo(-iconS*0.1,iconS*0.4);ctx.lineTo(iconS*0.5,-iconS*0.3);ctx.stroke();
         }
       } else {
-        // === NORMAL SORT BOX ===
-        ctx.shadowColor='rgba(0,0,0,0.22)';
-        ctx.shadowBlur=5*S;
-        ctx.shadowOffsetX=1*S;
-        ctx.shadowOffsetY=3*S;
+        ctx.shadowColor='rgba(0,0,0,0.22)';ctx.shadowBlur=5*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=3*S;
         ctx.drawImage(sortImg(b.ci),-L.sBw/2,-L.sBh/2,L.sBw,L.sBh);
         ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
         if(b.shineT>0){ctx.fillStyle='rgba(255,255,255,'+b.shineT*0.35+')';rRect(-L.sBw/2,-L.sBh/2,L.sBw,L.sBh,8*S);ctx.fill();}
@@ -1563,385 +1490,156 @@ function drawSortArea(){
     }
     if(visibleBoxes.length>0){
       var topBox=visibleBoxes[0].box;
-      if(topBox.type==='lock'){
-        ctx.fillStyle='rgba(200,170,80,0.5)';
-      } else {
-        var ac=COLORS[topBox.ci];ctx.fillStyle=ac.fill+'60';
-      }
+      if(topBox.type==='lock') ctx.fillStyle='rgba(200,170,80,0.5)';
+      else{var ac=COLORS[topBox.ci];ctx.fillStyle=ac.fill+'60';}
       var ax=x+L.sBw/2,ay=L.sTop-4*S;
       ctx.beginPath();ctx.moveTo(ax-5*S,ay-4*S);ctx.lineTo(ax+5*S,ay-4*S);ctx.lineTo(ax,ay+3*S);ctx.closePath();ctx.fill();
     }
   }
 }
-
 function drawObstacles(){
   for(var i=0;i<obstacles.length;i++){
     var ob=obstacles[i];
     if(ob.type==='cup'){
       if(ob.released)continue;
-      var hw=ob.w/2;
-      var left=ob.x-hw;var right=ob.x+hw;
-      var top=ob.y;var bot=ob.y+ob.h;
-      var wt=ob.wallThick;
-      var cornerR=5*S;
-      var taper=4*S;
-
+      var hw=ob.w/2;var left=ob.x-hw;var right=ob.x+hw;var top=ob.y;var bot=ob.y+ob.h;
+      var wt=ob.wallThick;var cornerR=5*S;var taper=4*S;
       ctx.save();
-
-      // Track rail
-      var trackLeft=ob.trackCx-ob.trackHalfW-hw;
-      var trackRight=ob.trackCx+ob.trackHalfW+hw;
-      ctx.strokeStyle='rgba(120,90,60,0.25)';
-      ctx.lineWidth=3*S;
-      ctx.setLineDash([4*S,4*S]);
-      ctx.beginPath();
-      ctx.moveTo(trackLeft,top+ob.h*0.5);
-      ctx.lineTo(trackRight,top+ob.h*0.5);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Cup shadow
-      ctx.shadowColor='rgba(0,0,0,0.3)';
-      ctx.shadowBlur=8*S;
-      ctx.shadowOffsetX=2*S;
-      ctx.shadowOffsetY=4*S;
-
-      // Cup body
-      ctx.fillStyle='#C4724E';
-      ctx.beginPath();
-      ctx.moveTo(left-taper,top);
-      ctx.lineTo(left,bot-cornerR);
-      ctx.quadraticCurveTo(left,bot,left+cornerR,bot);
-      ctx.lineTo(right-cornerR,bot);
-      ctx.quadraticCurveTo(right,bot,right,bot-cornerR);
-      ctx.lineTo(right+taper,top);
-      ctx.closePath();
-      ctx.fill();
-
-      // Clear shadow
-      ctx.shadowColor='transparent';ctx.shadowBlur=0;
-      ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
-
-      // Inner darker area
-      var inset=wt;
-      ctx.fillStyle='rgba(80,40,20,0.35)';
-      ctx.beginPath();
-      ctx.moveTo(left+inset-taper*0.6,top);
-      ctx.lineTo(left+inset,bot-cornerR);
+      var trackLeft=ob.trackCx-ob.trackHalfW-hw;var trackRight=ob.trackCx+ob.trackHalfW+hw;
+      ctx.strokeStyle='rgba(120,90,60,0.25)';ctx.lineWidth=3*S;ctx.setLineDash([4*S,4*S]);
+      ctx.beginPath();ctx.moveTo(trackLeft,top+ob.h*0.5);ctx.lineTo(trackRight,top+ob.h*0.5);ctx.stroke();ctx.setLineDash([]);
+      ctx.shadowColor='rgba(0,0,0,0.3)';ctx.shadowBlur=8*S;ctx.shadowOffsetX=2*S;ctx.shadowOffsetY=4*S;
+      ctx.fillStyle='#C4724E';ctx.beginPath();
+      ctx.moveTo(left-taper,top);ctx.lineTo(left,bot-cornerR);ctx.quadraticCurveTo(left,bot,left+cornerR,bot);
+      ctx.lineTo(right-cornerR,bot);ctx.quadraticCurveTo(right,bot,right,bot-cornerR);ctx.lineTo(right+taper,top);ctx.closePath();ctx.fill();
+      ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
+      var inset=wt;ctx.fillStyle='rgba(80,40,20,0.35)';ctx.beginPath();
+      ctx.moveTo(left+inset-taper*0.6,top);ctx.lineTo(left+inset,bot-cornerR);
       ctx.quadraticCurveTo(left+inset,bot-inset+2*S,left+inset+cornerR,bot-inset+2*S);
-      ctx.lineTo(right-inset-cornerR,bot-inset+2*S);
-      ctx.quadraticCurveTo(right-inset,bot-inset+2*S,right-inset,bot-cornerR);
-      ctx.lineTo(right-inset+taper*0.6,top);
-      ctx.closePath();
-      ctx.fill();
-
-      // Rim highlight
-      ctx.strokeStyle='rgba(255,200,150,0.5)';
-      ctx.lineWidth=2*S;
-      ctx.beginPath();
-      ctx.moveTo(left-taper,top);
-      ctx.lineTo(right+taper,top);
-      ctx.stroke();
-
-      // Horizontal band
-      var bandY=top+(bot-top)*0.35;
-      ctx.strokeStyle='rgba(180,100,60,0.4)';
-      ctx.lineWidth=2*S;
-      ctx.beginPath();
-      var bandLeftX=left+(bandY-top)/(bot-top)*taper*0.5;
-      var bandRightX=right-(bandY-top)/(bot-top)*taper*0.5+taper;
-      ctx.moveTo(bandLeftX,bandY);
-      ctx.lineTo(bandRightX,bandY);
-      ctx.stroke();
-
-      // Trapped marbles
-      for(var j=0;j<ob.trapped.length;j++){
-        var m=ob.trapped[j];
-        drawMarble(m.x,m.y,m.r,m.ci);
-      }
-
+      ctx.lineTo(right-inset-cornerR,bot-inset+2*S);ctx.quadraticCurveTo(right-inset,bot-inset+2*S,right-inset,bot-cornerR);
+      ctx.lineTo(right-inset+taper*0.6,top);ctx.closePath();ctx.fill();
+      ctx.strokeStyle='rgba(255,200,150,0.5)';ctx.lineWidth=2*S;ctx.beginPath();ctx.moveTo(left-taper,top);ctx.lineTo(right+taper,top);ctx.stroke();
+      var bandY=top+(bot-top)*0.35;ctx.strokeStyle='rgba(180,100,60,0.4)';ctx.lineWidth=2*S;ctx.beginPath();
+      var bandLeftX=left+(bandY-top)/(bot-top)*taper*0.5;var bandRightX=right-(bandY-top)/(bot-top)*taper*0.5+taper;
+      ctx.moveTo(bandLeftX,bandY);ctx.lineTo(bandRightX,bandY);ctx.stroke();
+      for(var j=0;j<ob.trapped.length;j++){var m=ob.trapped[j];drawMarble(m.x,m.y,m.r,m.ci);}
       ctx.restore();
     }
     if(ob.type==='gate'){
       ctx.save();
       var px=ob.pivotX,py=ob.pivotY;
-      // Arm hangs DOWN: angle=0 is straight down, neg=left, pos=right
-      var endX=px+Math.sin(ob.angle)*ob.barLen;
-      var endY=py+Math.cos(ob.angle)*ob.barLen;
-      var barW=6*S;
-
-      // Bar shadow
-      ctx.shadowColor='rgba(0,0,0,0.3)';
-      ctx.shadowBlur=6*S;
-      ctx.shadowOffsetX=1*S;
-      ctx.shadowOffsetY=3*S;
-
-      // Bar body — rounded thick line
-      ctx.strokeStyle='#A08060';
-      ctx.lineWidth=barW;
-      ctx.lineCap='round';
-      ctx.beginPath();
-      ctx.moveTo(px,py);
-      ctx.lineTo(endX,endY);
-      ctx.stroke();
-
-      // Bar highlight stripe
-      ctx.shadowColor='transparent';ctx.shadowBlur=0;
-      ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
-      ctx.strokeStyle='rgba(255,255,255,0.2)';
-      ctx.lineWidth=2*S;
-      ctx.beginPath();
-      ctx.moveTo(px,py);
-      ctx.lineTo(endX,endY);
-      ctx.stroke();
-
-      // Pivot hub — outer ring
+      var endX=px+Math.sin(ob.angle)*ob.barLen;var endY=py+Math.cos(ob.angle)*ob.barLen;var barW=6*S;
+      ctx.shadowColor='rgba(0,0,0,0.3)';ctx.shadowBlur=6*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=3*S;
+      ctx.strokeStyle='#A08060';ctx.lineWidth=barW;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(endX,endY);ctx.stroke();
+      ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
+      ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=2*S;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(endX,endY);ctx.stroke();
       var hubR=10*S;
-      ctx.shadowColor='rgba(0,0,0,0.25)';ctx.shadowBlur=4*S;
-      ctx.shadowOffsetY=2*S;
-      ctx.fillStyle='#8B7355';
-      ctx.beginPath();ctx.arc(px,py,hubR,0,Math.PI*2);ctx.fill();
+      ctx.shadowColor='rgba(0,0,0,0.25)';ctx.shadowBlur=4*S;ctx.shadowOffsetY=2*S;
+      ctx.fillStyle='#8B7355';ctx.beginPath();ctx.arc(px,py,hubR,0,Math.PI*2);ctx.fill();
       ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
-
-      // Inner hub
-      ctx.fillStyle='#A08060';
-      ctx.beginPath();ctx.arc(px,py,hubR*0.65,0,Math.PI*2);ctx.fill();
-
-      // Hub highlight
-      ctx.fillStyle='rgba(255,255,255,0.2)';
-      ctx.beginPath();ctx.arc(px-hubR*0.15,py-hubR*0.2,hubR*0.3,0,Math.PI*2);ctx.fill();
-
-      // Counter dots ABOVE pivot
-      var dotR=3.5*S;
-      var dotSpacing=10*S;
-      var dotsStartX=px-((ob.triggerCount-1)*dotSpacing)/2;
-      var dotsY=py-hubR-12*S;
-
-      // Feedback ring on switch
+      ctx.fillStyle='#A08060';ctx.beginPath();ctx.arc(px,py,hubR*0.65,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='rgba(255,255,255,0.2)';ctx.beginPath();ctx.arc(px-hubR*0.15,py-hubR*0.2,hubR*0.3,0,Math.PI*2);ctx.fill();
+      var dotR=3.5*S;var dotSpacing=10*S;var dotsStartX=px-((ob.triggerCount-1)*dotSpacing)/2;var dotsY=py-hubR-12*S;
       if(ob.switchT>0){
-        var ringAlpha=ob.switchT*0.6;
-        var ringR=hubR+20*S*(1-ob.switchT);
-        ctx.strokeStyle='rgba(255,215,0,'+ringAlpha+')';
-        ctx.lineWidth=3*S*ob.switchT;
+        var ringAlpha=ob.switchT*0.6;var ringR=hubR+20*S*(1-ob.switchT);
+        ctx.strokeStyle='rgba(255,215,0,'+ringAlpha+')';ctx.lineWidth=3*S*ob.switchT;
         ctx.beginPath();ctx.arc(px,py,ringR,0,Math.PI*2);ctx.stroke();
       }
-
       for(var d=0;d<ob.triggerCount;d++){
-        var dx2=dotsStartX+d*dotSpacing;
-        var isFilled=(d<ob.counter);
-
-        if(isFilled){
-          ctx.fillStyle='#FFD966';
-          ctx.shadowColor='rgba(255,217,102,0.4)';ctx.shadowBlur=4*S;
+        var dx2=dotsStartX+d*dotSpacing;var isFilled=(d<ob.counter);
+        if(isFilled){ctx.fillStyle='#FFD966';ctx.shadowColor='rgba(255,217,102,0.4)';ctx.shadowBlur=4*S;
           ctx.beginPath();ctx.arc(dx2,dotsY,dotR,0,Math.PI*2);ctx.fill();
           ctx.shadowColor='transparent';ctx.shadowBlur=0;
-          ctx.fillStyle='rgba(255,255,255,0.4)';
-          ctx.beginPath();ctx.arc(dx2-dotR*0.2,dotsY-dotR*0.25,dotR*0.35,0,Math.PI*2);ctx.fill();
-        } else {
-          ctx.fillStyle='rgba(120,100,80,0.2)';
-          ctx.beginPath();ctx.arc(dx2,dotsY,dotR,0,Math.PI*2);ctx.fill();
-          ctx.strokeStyle='rgba(120,100,80,0.35)';
-          ctx.lineWidth=1.5*S;
-          ctx.beginPath();ctx.arc(dx2,dotsY,dotR,0,Math.PI*2);ctx.stroke();
-        }
+          ctx.fillStyle='rgba(255,255,255,0.4)';ctx.beginPath();ctx.arc(dx2-dotR*0.2,dotsY-dotR*0.25,dotR*0.35,0,Math.PI*2);ctx.fill();
+        } else {ctx.fillStyle='rgba(120,100,80,0.2)';ctx.beginPath();ctx.arc(dx2,dotsY,dotR,0,Math.PI*2);ctx.fill();
+          ctx.strokeStyle='rgba(120,100,80,0.35)';ctx.lineWidth=1.5*S;ctx.beginPath();ctx.arc(dx2,dotsY,dotR,0,Math.PI*2);ctx.stroke();}
       }
-
-      // Direction arrow hint near dots
-      var arrowX=px+(ob.side<0?-1:1)*(((ob.triggerCount-1)*dotSpacing)/2+16*S);
-      var arrowY=dotsY;
-      var arrowDir=ob.side<0?1:-1;
-      ctx.fillStyle='rgba(120,100,80,0.3)';
-      ctx.beginPath();
-      ctx.moveTo(arrowX,arrowY-4*S);
-      ctx.lineTo(arrowX+arrowDir*6*S,arrowY);
-      ctx.lineTo(arrowX,arrowY+4*S);
-      ctx.closePath();
-      ctx.fill();
-
+      var arrowX=px+(ob.side<0?-1:1)*(((ob.triggerCount-1)*dotSpacing)/2+16*S);var arrowY=dotsY;var arrowDir=ob.side<0?1:-1;
+      ctx.fillStyle='rgba(120,100,80,0.3)';ctx.beginPath();
+      ctx.moveTo(arrowX,arrowY-4*S);ctx.lineTo(arrowX+arrowDir*6*S,arrowY);ctx.lineTo(arrowX,arrowY+4*S);ctx.closePath();ctx.fill();
       ctx.restore();
     }
     if(ob.type==='trapdoor'){
       for(var ci=0;ci<ob.cups.length;ci++){
-        var cup=ob.cups[ci];
-        var hw=cup.w/2;
-        var left=cup.x-hw;var right=cup.x+hw;
-        var top2=cup.y;var bot2=cup.y+cup.h;
-        var wt=cup.wallThick;
-        var cornerR=5*S;
-        var taper=4*S;
-
+        var cup=ob.cups[ci];var hw=cup.w/2;var left=cup.x-hw;var right=cup.x+hw;
+        var top2=cup.y;var bot2=cup.y+cup.h;var wt=cup.wallThick;var cornerR=5*S;var taper=4*S;
         ctx.save();
-
-        // Cup shadow
-        ctx.shadowColor='rgba(0,0,0,0.3)';
-        ctx.shadowBlur=8*S;
-        ctx.shadowOffsetX=2*S;
-        ctx.shadowOffsetY=4*S;
-
-        // Cup color based on state — closed=terracotta, open=muted/dark
-        var bodyColor=cup.open?'#8B6B50':'#C4724E';
-        var rimColor=cup.open?'rgba(180,150,120,0.3)':'rgba(255,200,150,0.5)';
-
-        // Cup body (left wall, bottom, right wall)
-        ctx.fillStyle=bodyColor;
-        ctx.beginPath();
-        ctx.moveTo(left-taper,top2);
-        ctx.lineTo(left,bot2-cornerR);
-        ctx.quadraticCurveTo(left,bot2,left+cornerR,bot2);
-        // Bottom — splits open when openT > 0
+        ctx.shadowColor='rgba(0,0,0,0.3)';ctx.shadowBlur=8*S;ctx.shadowOffsetX=2*S;ctx.shadowOffsetY=4*S;
+        var bodyColor=cup.open?'#8B6B50':'#C4724E';var rimColor=cup.open?'rgba(180,150,120,0.3)':'rgba(255,200,150,0.5)';
+        ctx.fillStyle=bodyColor;ctx.beginPath();
+        ctx.moveTo(left-taper,top2);ctx.lineTo(left,bot2-cornerR);ctx.quadraticCurveTo(left,bot2,left+cornerR,bot2);
         var split=cup.openT*hw*0.8;
-        if(cup.openT<0.05){
-          // Fully closed — solid bottom
-          ctx.lineTo(right-cornerR,bot2);
-        } else {
-          // Bottom opening: draw left half, gap, right half
-          ctx.lineTo(cup.x-split,bot2);
-          ctx.moveTo(cup.x+split,bot2);
-          ctx.lineTo(right-cornerR,bot2);
-        }
-        ctx.quadraticCurveTo(right,bot2,right,bot2-cornerR);
-        ctx.lineTo(right+taper,top2);
-        ctx.closePath();
-        ctx.fill();
-
-        // Clear shadow
-        ctx.shadowColor='transparent';ctx.shadowBlur=0;
-        ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
-
-        // Inner darker area
-        var inset=wt;
-        ctx.fillStyle='rgba(80,40,20,0.35)';
-        ctx.beginPath();
-        ctx.moveTo(left+inset-taper*0.6,top2);
-        ctx.lineTo(left+inset,bot2-cornerR);
+        if(cup.openT<0.05){ctx.lineTo(right-cornerR,bot2);}
+        else{ctx.lineTo(cup.x-split,bot2);ctx.moveTo(cup.x+split,bot2);ctx.lineTo(right-cornerR,bot2);}
+        ctx.quadraticCurveTo(right,bot2,right,bot2-cornerR);ctx.lineTo(right+taper,top2);ctx.closePath();ctx.fill();
+        ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetX=0;ctx.shadowOffsetY=0;
+        var inset=wt;ctx.fillStyle='rgba(80,40,20,0.35)';ctx.beginPath();
+        ctx.moveTo(left+inset-taper*0.6,top2);ctx.lineTo(left+inset,bot2-cornerR);
         ctx.quadraticCurveTo(left+inset,bot2-inset+2*S,left+inset+cornerR,bot2-inset+2*S);
-        ctx.lineTo(right-inset-cornerR,bot2-inset+2*S);
-        ctx.quadraticCurveTo(right-inset,bot2-inset+2*S,right-inset,bot2-cornerR);
-        ctx.lineTo(right-inset+taper*0.6,top2);
-        ctx.closePath();
-        ctx.fill();
-
-        // Rim highlight
-        ctx.strokeStyle=rimColor;
-        ctx.lineWidth=2*S;
-        ctx.beginPath();
-        ctx.moveTo(left-taper,top2);
-        ctx.lineTo(right+taper,top2);
-        ctx.stroke();
-
-        // Horizontal band
-        var bandY=top2+(bot2-top2)*0.35;
-        ctx.strokeStyle='rgba(180,100,60,0.4)';
-        ctx.lineWidth=2*S;
-        ctx.beginPath();
-        var bandLeftX=left+(bandY-top2)/(bot2-top2)*taper*0.5;
-        var bandRightX=right-(bandY-top2)/(bot2-top2)*taper*0.5+taper;
-        ctx.moveTo(bandLeftX,bandY);
-        ctx.lineTo(bandRightX,bandY);
-        ctx.stroke();
-
-        // Open/closed indicator icon
-        var iconY=top2-12*S;
-        var iconX=cup.x;
-        if(cup.open){
-          // Open arrow (down)
-          ctx.fillStyle='rgba(100,200,100,0.7)';
-          ctx.beginPath();
-          ctx.moveTo(iconX-6*S,iconY-3*S);
-          ctx.lineTo(iconX+6*S,iconY-3*S);
-          ctx.lineTo(iconX,iconY+5*S);
-          ctx.closePath();
-          ctx.fill();
-        } else {
-          // Closed bar
-          ctx.fillStyle='rgba(200,100,80,0.7)';
-          rRect(iconX-8*S,iconY-2*S,16*S,4*S,2*S);
-          ctx.fill();
-        }
-
-        // Timer progress arc above cup
-        var progress=(ob.timer%ob.interval)/ob.interval;
-        // For left cup: fill while closed (first half), for right: fill while closed (second half)
+        ctx.lineTo(right-inset-cornerR,bot2-inset+2*S);ctx.quadraticCurveTo(right-inset,bot2-inset+2*S,right-inset,bot2-cornerR);
+        ctx.lineTo(right-inset+taper*0.6,top2);ctx.closePath();ctx.fill();
+        ctx.strokeStyle=rimColor;ctx.lineWidth=2*S;ctx.beginPath();ctx.moveTo(left-taper,top2);ctx.lineTo(right+taper,top2);ctx.stroke();
+        var bandY=top2+(bot2-top2)*0.35;ctx.strokeStyle='rgba(180,100,60,0.4)';ctx.lineWidth=2*S;ctx.beginPath();
+        var bandLeftX=left+(bandY-top2)/(bot2-top2)*taper*0.5;var bandRightX=right-(bandY-top2)/(bot2-top2)*taper*0.5+taper;
+        ctx.moveTo(bandLeftX,bandY);ctx.lineTo(bandRightX,bandY);ctx.stroke();
+        var iconY=top2-12*S;var iconX=cup.x;
+        if(cup.open){ctx.fillStyle='rgba(100,200,100,0.7)';ctx.beginPath();
+          ctx.moveTo(iconX-6*S,iconY-3*S);ctx.lineTo(iconX+6*S,iconY-3*S);ctx.lineTo(iconX,iconY+5*S);ctx.closePath();ctx.fill();
+        } else {ctx.fillStyle='rgba(200,100,80,0.7)';rRect(iconX-8*S,iconY-2*S,16*S,4*S,2*S);ctx.fill();}
         var cupProgress;
-        if(cup.side==='left'){
-          cupProgress=cup.open?0:(1-(ob.timer%Math.floor(ob.interval/2))/(ob.interval/2));
-        } else {
-          cupProgress=cup.open?0:(1-(ob.timer%Math.floor(ob.interval/2))/(ob.interval/2));
-        }
-        var arcR=5*S;
-        var arcX=iconX;
-        var arcY=iconY-10*S;
-        ctx.strokeStyle='rgba(120,100,80,0.2)';
-        ctx.lineWidth=2.5*S;
-        ctx.beginPath();ctx.arc(arcX,arcY,arcR,0,Math.PI*2);ctx.stroke();
-        if(!cup.open){
-          ctx.strokeStyle='rgba(232,168,76,0.8)';
-          ctx.lineWidth=2.5*S;
-          ctx.beginPath();
-          ctx.arc(arcX,arcY,arcR,-Math.PI/2,-Math.PI/2+cupProgress*Math.PI*2);
-          ctx.stroke();
-        }
-
-        // Trapped marbles (draw on top)
-        for(var mj=0;mj<cup.trapped.length;mj++){
-          var m=cup.trapped[mj];
-          drawMarble(m.x,m.y,m.r,m.ci);
-        }
-
+        if(cup.side==='left') cupProgress=cup.open?0:(1-(ob.timer%Math.floor(ob.interval/2))/(ob.interval/2));
+        else cupProgress=cup.open?0:(1-(ob.timer%Math.floor(ob.interval/2))/(ob.interval/2));
+        var arcR=5*S;var arcX=iconX;var arcY=iconY-10*S;
+        ctx.strokeStyle='rgba(120,100,80,0.2)';ctx.lineWidth=2.5*S;ctx.beginPath();ctx.arc(arcX,arcY,arcR,0,Math.PI*2);ctx.stroke();
+        if(!cup.open){ctx.strokeStyle='rgba(232,168,76,0.8)';ctx.lineWidth=2.5*S;ctx.beginPath();
+          ctx.arc(arcX,arcY,arcR,-Math.PI/2,-Math.PI/2+cupProgress*Math.PI*2);ctx.stroke();}
+        for(var mj=0;mj<cup.trapped.length;mj++){var m=cup.trapped[mj];drawMarble(m.x,m.y,m.r,m.ci);}
         ctx.restore();
       }
     }
   }
 }
-
 function drawBackButton(){
   if(!imgs.level_select_button||!imgs.level_select_button.naturalWidth)return;
   var bx=L.bkX,by=L.bkY,bs=L.bkSize;
-  ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.3)';
-  ctx.shadowBlur=6*S;
-  ctx.shadowOffsetX=1*S;
-  ctx.shadowOffsetY=3*S;
-  ctx.drawImage(imgs.level_select_button,bx,by,bs,bs);
-  ctx.restore();
+  ctx.save();ctx.shadowColor='rgba(0,0,0,0.3)';ctx.shadowBlur=6*S;ctx.shadowOffsetX=1*S;ctx.shadowOffsetY=3*S;
+  ctx.drawImage(imgs.level_select_button,bx,by,bs,bs);ctx.restore();
 }
-
 function drawDebugWalls(){
   if(!calVisible)return;
   ctx.strokeStyle='rgba(255,0,0,0.4)';ctx.lineWidth=2;
-  for(var w=0;w<funnelWalls.length;w++){var wall=funnelWalls[w];
-    ctx.beginPath();ctx.moveTo(wall.x1,wall.y1);ctx.lineTo(wall.x2,wall.y2);ctx.stroke();}
-  ctx.strokeStyle='rgba(0,100,255,0.3)';ctx.lineWidth=1;
-  ctx.beginPath();
+  for(var w=0;w<funnelWalls.length;w++){var wall=funnelWalls[w];ctx.beginPath();ctx.moveTo(wall.x1,wall.y1);ctx.lineTo(wall.x2,wall.y2);ctx.stroke();}
+  ctx.strokeStyle='rgba(0,100,255,0.3)';ctx.lineWidth=1;ctx.beginPath();
   for(var i=0;i<beltPath.length;i++){if(i===0)ctx.moveTo(beltPath[i].x,beltPath[i].y);else ctx.lineTo(beltPath[i].x,beltPath[i].y);}
   ctx.closePath();ctx.stroke();
-  // Sort area outline
   ctx.strokeStyle='rgba(0,180,0,0.3)';ctx.lineWidth=1;
-  for(var c=0;c<4;c++){
-    var x=L.sSx+c*(L.sBw+L.sColGap);
-    ctx.strokeRect(x,L.sTop,L.sBw,SORT_VISIBLE_ROWS*(L.sBh+L.sGap));
-  }
-  // Obstacle walls
-  var obWalls=getObstacleWalls();
-  ctx.strokeStyle='rgba(200,100,0,0.5)';ctx.lineWidth=2;
-  for(var w=0;w<obWalls.length;w++){var wall=obWalls[w];
-    ctx.beginPath();ctx.moveTo(wall.x1,wall.y1);ctx.lineTo(wall.x2,wall.y2);ctx.stroke();}
+  for(var c=0;c<4;c++){var x=L.sSx+c*(L.sBw+L.sColGap);ctx.strokeRect(x,L.sTop,L.sBw,SORT_VISIBLE_ROWS*(L.sBh+L.sGap));}
+  var obWalls=getObstacleWalls();ctx.strokeStyle='rgba(200,100,0,0.5)';ctx.lineWidth=2;
+  for(var w=0;w<obWalls.length;w++){var wall=obWalls[w];ctx.beginPath();ctx.moveTo(wall.x1,wall.y1);ctx.lineTo(wall.x2,wall.y2);ctx.stroke();}
 }
 
 function frame(){
   if(gameActive){
     update();ctx.clearRect(0,0,W,H);
+    // Apply frenzy screen shake
+    if(frenzyMode&&frenzyT>0.1){
+      ctx.save();
+      ctx.translate(frenzyShakeX,frenzyShakeY);
+    }
     drawBackground();
     drawStock();
     drawPhysMarbles();
     drawFunnelOverlay();
     drawObstacles();
+    drawFrenzyEffects(); // Draw frenzy glow and streaks around belt
     drawBelt();
     drawJumpers();
     drawSortArea();
     drawBackButton();
     drawParticles();
     drawDebugWalls();
+    if(frenzyMode&&frenzyT>0.1) ctx.restore();
   }
   requestAnimationFrame(frame);
 }
@@ -1951,7 +1649,6 @@ loadImages(function(){
   showLevelSelect();
   frame();
 });
-
 </script>
 </body>
 </html>

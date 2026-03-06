@@ -127,8 +127,8 @@
   <div class="cr"><label>Lip%</label><input type="range" id="lipSlider" min="0" max="80" value="28"><span class="cv" id="lipVal">28</span></div>
   <div class="cr"><label>MrbGap</label><input type="range" id="mrbGapSlider" min="50" max="150" value="75"><span class="cv" id="mrbGapVal">75</span></div>
   <h3>&#128281; Back Button</h3>
-  <div class="cr"><label>X</label><input type="range" id="cbk-dx" min="-200" max="200" value="0"><span class="cv" id="cbk-dx-v">0</span></div>
-  <div class="cr"><label>Y</label><input type="range" id="cbk-dy" min="-200" max="200" value="0"><span class="cv" id="cbk-dy-v">0</span></div>
+  <div class="cr"><label>X</label><input type="range" id="cbk-dx" min="-200" max="200" value="-23"><span class="cv" id="cbk-dx-v">-23</span></div>
+  <div class="cr"><label>Y</label><input type="range" id="cbk-dy" min="-200" max="200" value="85"><span class="cv" id="cbk-dy-v">85</span></div>
   <div class="cr"><label>Size</label><input type="range" id="cbk-s" min="20" max="200" value="100"><span class="cv" id="cbk-s-v">100</span></div>
 </div>
 <div id="level-screen">
@@ -261,7 +261,7 @@ var cal={
   belt:{dx:0,dy:24,sw:0.80,sh:1.33},
   sort:{dx:0,dy:-7,s:0.96},
   marble:{s:1.37},
-  back:{dx:0,dy:0,s:1.0}
+  back:{dx:-23,dy:85,s:1.0}
 };
 var calPanel=document.getElementById('cal-panel');
 var calVisible=false;

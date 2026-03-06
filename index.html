@@ -126,6 +126,10 @@
   <div class="cr"><label>Speed</label><input type="range" id="beltSlider" min="3" max="60" value="31"><span class="cv" id="beltVal">31</span></div>
   <div class="cr"><label>Lip%</label><input type="range" id="lipSlider" min="0" max="80" value="28"><span class="cv" id="lipVal">28</span></div>
   <div class="cr"><label>MrbGap</label><input type="range" id="mrbGapSlider" min="50" max="150" value="75"><span class="cv" id="mrbGapVal">75</span></div>
+  <h3>&#128281; Back Button</h3>
+  <div class="cr"><label>X</label><input type="range" id="cbk-dx" min="-200" max="200" value="0"><span class="cv" id="cbk-dx-v">0</span></div>
+  <div class="cr"><label>Y</label><input type="range" id="cbk-dy" min="-200" max="200" value="0"><span class="cv" id="cbk-dy-v">0</span></div>
+  <div class="cr"><label>Size</label><input type="range" id="cbk-s" min="20" max="200" value="100"><span class="cv" id="cbk-s-v">100</span></div>
 </div>
 <div id="level-screen">
   <div class="ls-header">
@@ -256,7 +260,8 @@ var cal={
   funnel:{dx:0,dy:40,sw:1.03,sh:0.65},
   belt:{dx:0,dy:24,sw:0.80,sh:1.33},
   sort:{dx:0,dy:-7,s:0.96},
-  marble:{s:1.37}
+  marble:{s:1.37},
+  back:{dx:0,dy:0,s:1.0}
 };
 var calPanel=document.getElementById('cal-panel');
 var calVisible=false;
@@ -279,6 +284,7 @@ hookCal('cf-dx',cal.funnel,'dx',1);hookCal('cf-dy',cal.funnel,'dy',1);hookCal('c
 hookCal('cb-dx',cal.belt,'dx',1);hookCal('cb-dy',cal.belt,'dy',1);hookCal('cb-sw',cal.belt,'sw',0.01);hookCal('cb-sh',cal.belt,'sh',0.01);
 hookCal('co-dx',cal.sort,'dx',1);hookCal('co-dy',cal.sort,'dy',1);hookCal('co-s',cal.sort,'s',0.01);
 hookCal('cm-s',cal.marble,'s',0.01);
+hookCal('cbk-dx',cal.back,'dx',1);hookCal('cbk-dy',cal.back,'dy',1);hookCal('cbk-s',cal.back,'s',0.01);
 
 // === IMAGES ===
 var imgs={};
@@ -297,7 +303,8 @@ var imgSrcs={
   sort_blue:"sort_blue.png",
   sort_green:"sort_green.png",
   sort_yellow:"sort_yellow.png",
-  belt_slot_empty:"belt_slot_empty.png"
+  belt_slot_empty:"belt_slot_empty.png",
+  level_select_button:"level_select_button.png"
 };
 imgSrcs.concept_bg_1='concept_bg_1.png';
 imgSrcs.concept_bg_2='concept_bg_2.png';
@@ -593,6 +600,13 @@ function computeLayout(){
   L.sBh=32*S*oCal.s;L.sGap=3*S*oCal.s;L.sColGap=7*S*oCal.s;
   var stw=4*L.sBw+3*L.sColGap;
   L.sSx=sortCx-stw/2;
+
+  // BACK BUTTON
+  var bkCal=cal.back;
+  var bkSize=40*S*bkCal.s;
+  L.bkX=L.gameLeft+8*S+bkCal.dx*S;
+  L.bkY=10*S+bkCal.dy*S;
+  L.bkSize=bkSize;
 
   L.sortBeltT=[];
   for(var c=0;c<4;c++){
@@ -1058,6 +1072,10 @@ function isBoxTappable(idx){
 // === INPUT ===
 function handleTap(px,py){
   if(won||!gameActive)return;ensureAudio();
+  // Back to level select button
+  if(px>=L.bkX&&px<=L.bkX+L.bkSize&&py>=L.bkY&&py<=L.bkY+L.bkSize){
+    showLevelSelect();return;
+  }
   for(var i=0;i<stock.length;i++){
     var b=stock[i];if(b.used||b.spawning||b.revealT>0)continue;
     if(px>=b.x&&px<=b.x+L.bw&&py>=b.y&&py<=b.y+L.bh){
@@ -1077,6 +1095,10 @@ document.getElementById('cal-panel').addEventListener('touchstart',function(e){e
 canvas.addEventListener('mousemove',function(e){
   hoverIdx=-1;
   if(!gameActive)return;
+  // Back button hover
+  if(e.clientX>=L.bkX&&e.clientX<=L.bkX+L.bkSize&&e.clientY>=L.bkY&&e.clientY<=L.bkY+L.bkSize){
+    canvas.style.cursor='pointer';return;
+  }
   for(var i=0;i<stock.length;i++){var b=stock[i];if(b.used||b.spawning||b.revealT>0)continue;
     if(!isBoxTappable(i))continue;
     if(e.clientX>=b.x&&e.clientX<=b.x+L.bw&&e.clientY>=b.y&&e.clientY<=b.y+L.bh){hoverIdx=i;break;}}
@@ -1872,6 +1894,18 @@ function drawObstacles(){
   }
 }
 
+function drawBackButton(){
+  if(!imgs.level_select_button||!imgs.level_select_button.naturalWidth)return;
+  var bx=L.bkX,by=L.bkY,bs=L.bkSize;
+  ctx.save();
+  ctx.shadowColor='rgba(0,0,0,0.3)';
+  ctx.shadowBlur=6*S;
+  ctx.shadowOffsetX=1*S;
+  ctx.shadowOffsetY=3*S;
+  ctx.drawImage(imgs.level_select_button,bx,by,bs,bs);
+  ctx.restore();
+}
+
 function drawDebugWalls(){
   if(!calVisible)return;
   ctx.strokeStyle='rgba(255,0,0,0.4)';ctx.lineWidth=2;
@@ -1905,6 +1939,7 @@ function frame(){
     drawBelt();
     drawJumpers();
     drawSortArea();
+    drawBackButton();
     drawParticles();
     drawDebugWalls();
   }
